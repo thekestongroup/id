@@ -1,0 +1,128 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/ory/fosite"
+	"github.com/ory/fosite/handler/openid"
+	"github.com/ory/fosite/token/jwt"
+)
+
+func newSession(user string) *openid.DefaultSession {
+	return &openid.DefaultSession{
+		Claims: &jwt.IDTokenClaims{
+			Issuer:      issuer,
+			Subject:     user,
+			Audience:    []string{"keston-work"},
+			ExpiresAt:   time.Now().Add(time.Hour),
+			IssuedAt:    time.Now(),
+			RequestedAt: time.Now(),
+			AuthTime:    time.Now(),
+			Extra: map[string]interface{}{
+				"name":  "Administrator",
+				"email": "admin@keston.local",
+			},
+		},
+		Headers: &jwt.Headers{Extra: map[string]interface{}{}},
+	}
+}
+
+func authorizeHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	ar, err := provider.NewAuthorizeRequest(ctx, r)
+	if err != nil {
+		provider.WriteAuthorizeError(ctx, w, ar, err)
+		return
+	}
+
+	if currentUser(r) == "" {
+		http.Redirect(w, r, "/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+		return
+	}
+
+	if !isConsented(r) {
+		http.Redirect(w, r, "/consent?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+		return
+	}
+
+	for _, scope := range ar.GetRequestedScopes() {
+		ar.GrantScope(scope)
+	}
+
+	response, err := provider.NewAuthorizeResponse(ctx, ar, newSession(currentUser(r)))
+	if err != nil {
+		provider.WriteAuthorizeError(ctx, w, ar, err)
+		return
+	}
+	provider.WriteAuthorizeResponse(ctx, w, ar, response)
+}
+
+func tokenHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	accessRequest, err := provider.NewAccessRequest(ctx, r, new(openid.DefaultSession))
+	if err != nil {
+		provider.WriteAccessError(ctx, w, accessRequest, err)
+		return
+	}
+
+	response, err := provider.NewAccessResponse(ctx, accessRequest)
+	if err != nil {
+		provider.WriteAccessError(ctx, w, accessRequest, err)
+		return
+	}
+
+	provider.WriteAccessResponse(ctx, w, accessRequest, response)
+}
+
+func userinfoHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	token := bearerToken(r)
+	if token == "" {
+		writeJSONError(w, http.StatusUnauthorized, "invalid_token", "missing bearer token")
+		return
+	}
+
+	tokenType, ar, err := provider.IntrospectToken(ctx, token, fosite.AccessToken, &openid.DefaultSession{})
+	if err != nil || tokenType != fosite.AccessToken {
+		writeJSONError(w, http.StatusUnauthorized, "invalid_token", "invalid or expired token")
+		return
+	}
+
+	session, ok := ar.GetSession().(*openid.DefaultSession)
+	if !ok || session.Claims == nil {
+		writeJSONError(w, http.StatusInternalServerError, "invalid_token", "session missing claims")
+		return
+	}
+
+	result := map[string]interface{}{"sub": session.Claims.Subject}
+	for k, v := range session.Claims.Extra {
+		result[k] = v
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+func bearerToken(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if len(auth) > 7 && strings.EqualFold(auth[:7], "Bearer ") {
+		return auth[7:]
+	}
+	return ""
+}
+
+func writeJSONError(w http.ResponseWriter, status int, code, description string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error":             code,
+		"error_description": description,
+	})
+}

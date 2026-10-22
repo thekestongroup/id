@@ -1,0 +1,11 @@
+# Node / web
+web/node_modules/
+
+# Logs
+*.log
+
+# Compiled binary
+/keston-id
+/id
+
+.DS_Store

@@ -1,0 +1,81 @@
+# Keston ID
+
+OIDC/OAuth2 identity provider for the Keston suite. Built with **Go + fosite** on
+the backend and a **Vue** login/consent UI using the
+[`@thekestongroup/ui`](https://github.com/thekestongroup/ui) component library.
+
+## Endpoints
+
+| Endpoint | Description |
+| --- | --- |
+| `/authorize` | OAuth2 / OIDC authorization endpoint |
+| `/token` | Token endpoint |
+| `/userinfo` | OpenID Connect UserInfo endpoint |
+| `/.well-known/jwks.json` | JSON Web Key Set (RS256) |
+| `/.well-known/openid-configuration` | OIDC discovery document |
+| `/login` | Login page (Vue) |
+| `/consent` | Consent page (Vue) |
+
+Issuer: `http://localhost:4444`
+
+## Running
+
+```sh
+make build   # installs web deps, builds the Vue UI, then builds the Go binary
+./keston-id  # serves on :4444
+```
+
+Or, for development, run the two halves separately:
+
+```sh
+# terminal 1 — Go server (serves a placeholder until the web build exists)
+go run .
+
+# terminal 2 — Vue UI with HMR
+cd web && pnpm dev
+```
+
+## Test client
+
+| Field | Value |
+| --- | --- |
+| `client_id` | `keston-work` |
+| `client_secret` | `keston-work-secret` |
+| `redirect_uri` | `http://localhost:3000/callback` |
+| `grant_types` | `authorization_code`, `refresh_token` |
+| `scopes` | `openid`, `profile`, `email`, `offline_access` |
+
+## Demo user
+
+| Username | Password |
+| --- | --- |
+| `admin` | `password` |
+
+## Example authorization code flow (with PKCE)
+
+```sh
+# 1. Start the flow
+curl -i "http://localhost:4444/authorize?client_id=keston-work&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&response_type=code&scope=openid%20profile%20email&state=statevalue123&nonce=noncevalue123&code_challenge=<challenge>&code_challenge_method=S256"
+
+# Follow the redirects: log in with admin/password, then approve consent.
+# The final redirect to the client carries ?code=<authorization code>.
+
+# 2. Exchange the code for tokens
+curl -u "keston-work:keston-work-secret" \
+  -d "grant_type=authorization_code" \
+  --data-urlencode "code=<code>" \
+  --data-urlencode "redirect_uri=http://localhost:3000/callback" \
+  --data-urlencode "code_verifier=<verifier>" \
+  http://localhost:4444/token
+
+# 3. Call the UserInfo endpoint
+curl -H "Authorization: Bearer <access_token>" http://localhost:4444/userinfo
+```
+
+## Notes
+
+- The UI consumes `@thekestongroup/ui` from source (via a Vite alias) while the
+  package is unpublished. Update `web/vite.config.ts` when it is published.
+- User store, clients, and tokens are held in memory (fosite memory store) and
+  reset on restart. Swap in Postgres for production.
+- `web/dist` is committed so `go build` embeds the UI without requiring Node.
