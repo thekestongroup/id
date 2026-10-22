@@ -1,5 +1,8 @@
-# Node / web
-web/node_modules/
+# Node
+node_modules/
+
+# Demo build output (test client runs via `pnpm dev`, not embedded)
+demo/dist/
 
 # Logs
 *.log

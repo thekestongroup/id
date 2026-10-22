@@ -52,6 +52,16 @@ func init() {
 		Audience:      []string{"keston-work"},
 	}
 
+	store.Clients["keston-demo"] = &fosite.DefaultClient{
+		ID:            "keston-demo",
+		RedirectURIs:  []string{"http://localhost:3000/callback"},
+		ResponseTypes: []string{"code"},
+		GrantTypes:    []string{"authorization_code", "refresh_token"},
+		Scopes:        []string{"openid", "profile", "email", "offline_access"},
+		Audience:      []string{"keston-demo"},
+		Public:        true,
+	}
+
 	config = &fosite.Config{
 		AccessTokenLifespan:         time.Hour,
 		AuthorizeCodeLifespan:       time.Minute * 10,
@@ -61,7 +71,7 @@ func init() {
 		IDTokenIssuer:               issuer,
 		TokenURL:                    issuer + "/token",
 		SendDebugMessagesToClients:  true,
-		EnforcePKCEForPublicClients: false,
+		EnforcePKCEForPublicClients: true,
 	}
 
 	provider = compose.ComposeAllEnabled(config, store, privateKey)
@@ -80,7 +90,20 @@ func main() {
 
 	addr := ":4444"
 	log.Printf("Keston ID listening on %s (issuer %s)", addr, issuer)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Fatal(http.ListenAndServe(addr, corsMiddleware(mux)))
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func distFS() (fs.FS, error) {

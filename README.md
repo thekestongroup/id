@@ -35,6 +35,22 @@ go run .
 cd web && pnpm dev
 ```
 
+## Demo test app
+
+`demo/` is a browser test client (like the Keston UI demo) that exercises the
+service end-to-end: discovery, JWKS, authorization code + PKCE, token exchange
+and userinfo. It registers as the public `keston-demo` client.
+
+```sh
+# terminal 1 — Keston ID
+./keston-id
+
+# terminal 2 — demo test client (http://localhost:3000)
+cd demo && pnpm install && pnpm dev
+```
+
+Open http://localhost:3000 and click **Sign in with Keston ID**.
+
 ## Test client
 
 | Field | Value |
