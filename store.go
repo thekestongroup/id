@@ -451,21 +451,22 @@ func (s *SQLStore) Seed(ctx context.Context) error {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO clients (id, secret, redirect_uris, grant_types, response_types, scopes, audience, public)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)
+		`INSERT INTO clients (id, secret, redirect_uris, grant_types, response_types, scopes, audience, public, backchannel_logout_uri)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8)
 		 ON CONFLICT (id) DO NOTHING`,
 		"keston-work", string(workSecret), encodeStrings([]string{cfg.WorkRedirect}),
 		encodeStrings([]string{"authorization_code", "refresh_token"}),
 		encodeStrings([]string{"code"}),
 		encodeStrings([]string{"openid", "profile", "email", "offline_access"}),
 		encodeStrings([]string{"keston-work"}),
+		cfg.WorkLogoutURI,
 	); err != nil {
 		return err
 	}
 
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO clients (id, secret, redirect_uris, grant_types, response_types, scopes, audience, public)
-		 VALUES ($1, '', $2, $3, $4, $5, $6, TRUE)
+		`INSERT INTO clients (id, secret, redirect_uris, grant_types, response_types, scopes, audience, public, backchannel_logout_uri)
+		 VALUES ($1, '', $2, $3, $4, $5, $6, TRUE, '')
 		 ON CONFLICT (id) DO NOTHING`,
 		"keston-demo", encodeStrings([]string{cfg.DemoRedirect}),
 		encodeStrings([]string{"authorization_code", "refresh_token"}),
@@ -477,4 +478,39 @@ func (s *SQLStore) Seed(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// GetBackchannelLogoutURIs returns the back-channel logout URI for each client
+// that registered one, keyed by client ID.
+func (s *SQLStore) GetBackchannelLogoutURIs(ctx context.Context) (map[string]string, error) {
+	rows, err := s.conn(ctx).QueryContext(ctx, `SELECT id, backchannel_logout_uri FROM clients WHERE backchannel_logout_uri <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]string{}
+	for rows.Next() {
+		var id, uri string
+		if err := rows.Scan(&id, &uri); err != nil {
+			return nil, err
+		}
+		out[id] = uri
+	}
+	return out, rows.Err()
+}
+
+// RevokeSession records a session ID as revoked.
+func (s *SQLStore) RevokeSession(ctx context.Context, sid string) error {
+	_, err := s.conn(ctx).ExecContext(ctx,
+		`INSERT INTO revoked_sessions (sid, revoked_at) VALUES ($1, now()) ON CONFLICT (sid) DO NOTHING`, sid,
+	)
+	return err
+}
+
+// IsSessionRevoked reports whether the session ID has been revoked.
+func (s *SQLStore) IsSessionRevoked(ctx context.Context, sid string) (bool, error) {
+	var count int
+	err := s.conn(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM revoked_sessions WHERE sid = $1`, sid).Scan(&count)
+	return count > 0, err
 }

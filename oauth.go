@@ -33,7 +33,8 @@ func authorizeHandler(w http.ResponseWriter, r *http.Request) {
 		ar.GrantScope(scope)
 	}
 
-	response, err := provider.NewAuthorizeResponse(ctx, ar, newSession(currentUser(r), ar.GetClient().GetID()))
+	sess, _ := currentSession(r)
+	response, err := provider.NewAuthorizeResponse(ctx, ar, newSession(sess.Username, ar.GetClient().GetID(), sess.SID))
 	if err != nil {
 		provider.WriteAuthorizeError(ctx, w, ar, err)
 		return

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 type sessionData struct {
 	Username  string `json:"u"`
 	Consented bool   `json:"c"`
+	SID       string `json:"sid"`
 }
 
 const sessionCookieName = "keston_session"
@@ -69,9 +71,19 @@ func currentUser(r *http.Request) string {
 	return ""
 }
 
+func currentSession(r *http.Request) (sessionData, bool) {
+	return getSession(r)
+}
+
 func isConsented(r *http.Request) bool {
 	data, ok := getSession(r)
 	return ok && data.Consented
+}
+
+func randomID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 func authenticateUser(ctx context.Context, username, password string) bool {
@@ -102,7 +114,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		returnTo := safeReturnTo(r.PostForm.Get("return_to"))
 
 		if authenticateUser(r.Context(), username, password) {
-			setSession(w, sessionData{Username: username})
+			setSession(w, sessionData{Username: username, SID: randomID()})
 			http.Redirect(w, r, returnTo, http.StatusFound)
 			return
 		}

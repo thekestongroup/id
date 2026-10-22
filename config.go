@@ -7,17 +7,20 @@ import (
 	"encoding/pem"
 	"log"
 	"os"
+	"time"
 )
 
 // Config holds runtime configuration, sourced from environment variables
 // (with dev-friendly defaults so `go run .` works out of the box).
 type Config struct {
-	Issuer       string
-	Addr         string
-	Secret       []byte
-	WorkRedirect string
-	DemoRedirect string
-	DatabaseURL  string
+	Issuer             string
+	Addr               string
+	Secret             []byte
+	WorkRedirect       string
+	DemoRedirect       string
+	WorkLogoutURI      string
+	DatabaseURL        string
+	AccessTokenLifespan time.Duration
 }
 
 var cfg *Config
@@ -31,13 +34,22 @@ func loadConfig() *Config {
 		secret = secret[:32]
 	}
 
+	lifespan := 5 * time.Minute
+	if v := os.Getenv("KESTON_ID_ACCESS_TOKEN_LIFESPAN"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			lifespan = d
+		}
+	}
+
 	return &Config{
-		Issuer:       envOr("KESTON_ID_ISSUER", "http://localhost:4444"),
-		Addr:         envOr("KESTON_ID_ADDR", ":4444"),
-		Secret:       []byte(secret),
-		WorkRedirect: envOr("KESTON_ID_WORK_REDIRECT_URI", "http://localhost:3001/callback"),
-		DemoRedirect: envOr("KESTON_ID_DEMO_REDIRECT_URI", "http://localhost:3000/callback"),
-		DatabaseURL:  os.Getenv("KESTON_ID_DATABASE_URL"),
+		Issuer:              envOr("KESTON_ID_ISSUER", "http://localhost:4444"),
+		Addr:                envOr("KESTON_ID_ADDR", ":4444"),
+		Secret:              []byte(secret),
+		WorkRedirect:        envOr("KESTON_ID_WORK_REDIRECT_URI", "http://localhost:3001/callback"),
+		DemoRedirect:        envOr("KESTON_ID_DEMO_REDIRECT_URI", "http://localhost:3000/callback"),
+		WorkLogoutURI:       envOr("KESTON_ID_WORK_LOGOUT_URI", "http://localhost:3001/backchannel-logout"),
+		DatabaseURL:         os.Getenv("KESTON_ID_DATABASE_URL"),
+		AccessTokenLifespan: lifespan,
 	}
 }
 

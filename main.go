@@ -38,7 +38,7 @@ func init() {
 	privateKey = loadPrivateKey()
 
 	config = &fosite.Config{
-		AccessTokenLifespan:         time.Hour,
+		AccessTokenLifespan:         cfg.AccessTokenLifespan,
 		AuthorizeCodeLifespan:       time.Minute * 10,
 		IDTokenLifespan:             time.Hour,
 		RefreshTokenLifespan:        time.Hour * 24,
@@ -137,6 +137,10 @@ func seedMemoryStore() *storage.MemoryStore {
 		Public:        true,
 	}
 
+	mu.Lock()
+	memoryBackchannelURIs["keston-work"] = cfg.WorkLogoutURI
+	mu.Unlock()
+
 	return s
 }
 
@@ -147,6 +151,8 @@ func main() {
 	mux.HandleFunc("/userinfo", userinfoHandler)
 	mux.HandleFunc("/login", loginHandler)
 	mux.HandleFunc("/consent", consentHandler)
+	mux.HandleFunc("/logout", logoutHandler)
+	mux.HandleFunc("/introspect", introspectHandler)
 	mux.HandleFunc("/.well-known/jwks.json", jwksHandler)
 	mux.HandleFunc("/.well-known/openid-configuration", discoveryHandler)
 	mux.HandleFunc("/", webHandler)

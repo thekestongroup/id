@@ -16,10 +16,13 @@ type Session struct {
 	IDHeaders *jwt.Headers
 }
 
-func newSession(user, audience string) *Session {
+func newSession(user, audience, sid string) *Session {
 	extra := map[string]interface{}{
 		"name":  "Administrator",
 		"email": "admin@keston.local",
+	}
+	if sid != "" {
+		extra["sid"] = sid
 	}
 	return &Session{
 		JWTSession: &oauth2.JWTSession{
