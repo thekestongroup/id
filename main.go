@@ -15,13 +15,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const issuer = "http://localhost:4444"
-
 //go:embed all:web/dist
 var webFS embed.FS
 
 var (
-	secret     = []byte("0123456789abcdef0123456789abcdef") // 32 bytes for HMAC signing
 	privateKey *rsa.PrivateKey
 	store      *storage.MemoryStore
 	config     *fosite.Config
@@ -30,6 +27,9 @@ var (
 
 func init() {
 	var err error
+
+	cfg = loadConfig()
+
 	privateKey, err = rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		log.Fatalf("failed to generate RSA key: %v", err)
@@ -45,7 +45,7 @@ func init() {
 	store.Clients["keston-work"] = &fosite.DefaultClient{
 		ID:            "keston-work",
 		Secret:        clientSecretHash,
-		RedirectURIs:  []string{"http://localhost:3000/callback"},
+		RedirectURIs:  []string{cfg.WorkRedirect},
 		ResponseTypes: []string{"code"},
 		GrantTypes:    []string{"authorization_code", "refresh_token"},
 		Scopes:        []string{"openid", "profile", "email", "offline_access"},
@@ -54,7 +54,7 @@ func init() {
 
 	store.Clients["keston-demo"] = &fosite.DefaultClient{
 		ID:            "keston-demo",
-		RedirectURIs:  []string{"http://localhost:3000/callback"},
+		RedirectURIs:  []string{cfg.DemoRedirect},
 		ResponseTypes: []string{"code"},
 		GrantTypes:    []string{"authorization_code", "refresh_token"},
 		Scopes:        []string{"openid", "profile", "email", "offline_access"},
@@ -67,9 +67,9 @@ func init() {
 		AuthorizeCodeLifespan:       time.Minute * 10,
 		IDTokenLifespan:             time.Hour,
 		RefreshTokenLifespan:        time.Hour * 24,
-		GlobalSecret:                secret,
-		IDTokenIssuer:               issuer,
-		TokenURL:                    issuer + "/token",
+		GlobalSecret:                cfg.Secret,
+		IDTokenIssuer:               cfg.Issuer,
+		TokenURL:                    cfg.Issuer + "/token",
 		SendDebugMessagesToClients:  true,
 		EnforcePKCEForPublicClients: true,
 	}
@@ -88,8 +88,8 @@ func main() {
 	mux.HandleFunc("/.well-known/openid-configuration", discoveryHandler)
 	mux.HandleFunc("/", webHandler)
 
-	addr := ":4444"
-	log.Printf("Keston ID listening on %s (issuer %s)", addr, issuer)
+	addr := cfg.Addr
+	log.Printf("Keston ID listening on %s (issuer %s)", addr, cfg.Issuer)
 	log.Fatal(http.ListenAndServe(addr, corsMiddleware(mux)))
 }
 

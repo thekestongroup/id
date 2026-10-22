@@ -21,11 +21,11 @@ func jwksHandler(w http.ResponseWriter, r *http.Request) {
 
 func discoveryHandler(w http.ResponseWriter, r *http.Request) {
 	doc := map[string]interface{}{
-		"issuer":                                issuer,
-		"authorization_endpoint":                issuer + "/authorize",
-		"token_endpoint":                        issuer + "/token",
-		"userinfo_endpoint":                     issuer + "/userinfo",
-		"jwks_uri":                              issuer + "/.well-known/jwks.json",
+		"issuer":                                cfg.Issuer,
+		"authorization_endpoint":                cfg.Issuer + "/authorize",
+		"token_endpoint":                        cfg.Issuer + "/token",
+		"userinfo_endpoint":                     cfg.Issuer + "/userinfo",
+		"jwks_uri":                              cfg.Issuer + "/.well-known/jwks.json",
 		"response_types_supported":              []string{"code"},
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},

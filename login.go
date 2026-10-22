@@ -19,7 +19,7 @@ type sessionData struct {
 const sessionCookieName = "keston_session"
 
 func sign(msg string) string {
-	mac := hmac.New(sha256.New, secret)
+	mac := hmac.New(sha256.New, cfg.Secret)
 	mac.Write([]byte(msg))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }

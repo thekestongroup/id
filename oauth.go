@@ -12,12 +12,12 @@ import (
 	"github.com/ory/fosite/token/jwt"
 )
 
-func newSession(user string) *openid.DefaultSession {
+func newSession(user, audience string) *openid.DefaultSession {
 	return &openid.DefaultSession{
 		Claims: &jwt.IDTokenClaims{
-			Issuer:      issuer,
+			Issuer:      cfg.Issuer,
 			Subject:     user,
-			Audience:    []string{"keston-work"},
+			Audience:    []string{audience},
 			ExpiresAt:   time.Now().Add(time.Hour),
 			IssuedAt:    time.Now(),
 			RequestedAt: time.Now(),
@@ -54,7 +54,7 @@ func authorizeHandler(w http.ResponseWriter, r *http.Request) {
 		ar.GrantScope(scope)
 	}
 
-	response, err := provider.NewAuthorizeResponse(ctx, ar, newSession(currentUser(r)))
+	response, err := provider.NewAuthorizeResponse(ctx, ar, newSession(currentUser(r), ar.GetClient().GetID()))
 	if err != nil {
 		provider.WriteAuthorizeError(ctx, w, ar, err)
 		return
