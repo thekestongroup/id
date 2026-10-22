@@ -57,7 +57,7 @@ Open http://localhost:3000 and click **Sign in with Keston ID**.
 | --- | --- |
 | `client_id` | `keston-work` |
 | `client_secret` | `keston-work-secret` |
-| `redirect_uri` | `http://localhost:3000/callback` |
+| `redirect_uri` | `http://localhost:3001/callback` |
 | `grant_types` | `authorization_code`, `refresh_token` |
 | `scopes` | `openid`, `profile`, `email`, `offline_access` |
 
@@ -88,10 +88,25 @@ curl -u "keston-work:keston-work-secret" \
 curl -H "Authorization: Bearer <access_token>" http://localhost:4444/userinfo
 ```
 
+## Configuration
+
+Environment variables (with dev-friendly defaults):
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `KESTON_ID_ISSUER` | `http://localhost:4444` | Public issuer URL (discovery, ID/access token `iss`) |
+| `KESTON_ID_ADDR` | `:4444` | Listen address |
+| `KESTON_ID_SECRET` | dev value | 32-byte HMAC secret for code/refresh tokens |
+| `KESTON_ID_RSA_PRIVATE_KEY` | (generated) | PEM RSA key for signing JWTs; set to keep JWT access tokens valid across restarts |
+| `KESTON_ID_DATABASE_URL` | (empty → in-memory) | Postgres DSN; when set, clients/users/refresh tokens/codes are persisted |
+| `KESTON_ID_WORK_REDIRECT_URI` | `http://localhost:3001/callback` | Registered redirect URI for `keston-work` |
+| `KESTON_ID_DEMO_REDIRECT_URI` | `http://localhost:3000/callback` | Registered redirect URI for `keston-demo` |
+
 ## Notes
 
-- The UI consumes `@thekestongroup/ui` from source (via a Vite alias) while the
-  package is unpublished. Update `web/vite.config.ts` when it is published.
-- User store, clients, and tokens are held in memory (fosite memory store) and
-  reset on restart. Swap in Postgres for production.
+- The UI consumes `@thekestongroup/ui` from GitHub Packages.
+- With `KESTON_ID_DATABASE_URL` set, storage is backed by Postgres (schema
+  auto-applied on startup). Access tokens are stateless JWTs (not persisted);
+  refresh tokens, authorize codes, OIDC/PKCE sessions, clients and users are.
+- Without a database URL it falls back to an in-memory store (dev only).
 - `web/dist` is committed so `go build` embeds the UI without requiring Node.

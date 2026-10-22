@@ -35,7 +35,7 @@ func loadConfig() *Config {
 		Issuer:       envOr("KESTON_ID_ISSUER", "http://localhost:4444"),
 		Addr:         envOr("KESTON_ID_ADDR", ":4444"),
 		Secret:       []byte(secret),
-		WorkRedirect: envOr("KESTON_ID_WORK_REDIRECT_URI", "http://localhost:3000/callback"),
+		WorkRedirect: envOr("KESTON_ID_WORK_REDIRECT_URI", "http://localhost:3001/callback"),
 		DemoRedirect: envOr("KESTON_ID_DEMO_REDIRECT_URI", "http://localhost:3000/callback"),
 		DatabaseURL:  os.Getenv("KESTON_ID_DATABASE_URL"),
 	}
