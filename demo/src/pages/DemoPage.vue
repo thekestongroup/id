@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import Button from '@thekestongroup/ui/components/Button.vue'
+import { Button } from '@thekestongroup/ui'
 import { fetchDiscovery, fetchJwks, oidc, startLogin } from '../lib/oidc'
 
 type Status = 'loading' | 'ok' | 'error'

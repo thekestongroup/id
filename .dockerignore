@@ -1,0 +1,10 @@
+.git
+.gitignore
+node_modules
+web/node_modules
+demo/node_modules
+web/dist
+demo/dist
+/keston-id
+*.log
+.DS_Store

@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "reka-ui": "2.11.0",
+    "@thekestongroup/ui": "^0.1.0",
     "vue": "3.5.44"
   },
   "devDependencies": {

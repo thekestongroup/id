@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import Button from '@thekestongroup/ui/components/Button.vue'
+import { Button } from '@thekestongroup/ui'
 
 const params = new URLSearchParams(window.location.search)
 const returnTo = params.get('return_to') ?? ''

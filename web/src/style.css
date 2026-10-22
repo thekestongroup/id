@@ -1,2 +1,2 @@
 @import "tailwindcss";
-@source "../../../ui/src";
+@source "../node_modules/@thekestongroup/ui/src";

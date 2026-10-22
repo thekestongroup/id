@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import Button from '@thekestongroup/ui/components/Button.vue'
-import Input from '@thekestongroup/ui/components/Input.vue'
-import Label from '@thekestongroup/ui/components/Label.vue'
+import { Button, Input, Label } from '@thekestongroup/ui'
 
 const params = new URLSearchParams(window.location.search)
 const returnTo = params.get('return_to') ?? ''
