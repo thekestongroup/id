@@ -1,50 +1,125 @@
 package main
 
 import (
-	"crypto/rand"
+	"context"
 	"crypto/rsa"
+	"database/sql"
 	"embed"
 	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
 	"github.com/ory/fosite/storage"
+	"github.com/ory/fosite/token/jwt"
 	"golang.org/x/crypto/bcrypt"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 //go:embed all:web/dist
 var webFS embed.FS
 
+//go:embed schema.sql
+var schemaSQL string
+
 var (
 	privateKey *rsa.PrivateKey
-	store      *storage.MemoryStore
 	config     *fosite.Config
 	provider   fosite.OAuth2Provider
+	sqlStore   *SQLStore
 )
 
 func init() {
-	var err error
-
 	cfg = loadConfig()
+	privateKey = loadPrivateKey()
 
-	privateKey, err = rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		log.Fatalf("failed to generate RSA key: %v", err)
+	config = &fosite.Config{
+		AccessTokenLifespan:         time.Hour,
+		AuthorizeCodeLifespan:       time.Minute * 10,
+		IDTokenLifespan:             time.Hour,
+		RefreshTokenLifespan:        time.Hour * 24,
+		GlobalSecret:                cfg.Secret,
+		IDTokenIssuer:               cfg.Issuer,
+		AccessTokenIssuer:           cfg.Issuer,
+		TokenURL:                    cfg.Issuer + "/token",
+		SendDebugMessagesToClients:  true,
+		EnforcePKCEForPublicClients: true,
 	}
 
-	store = storage.NewMemoryStore()
+	keyGetter := func(ctx context.Context) (interface{}, error) { return privateKey, nil }
+	hmacStrategy := compose.NewOAuth2HMACStrategy(config)
+	jwtStrategy := compose.NewOAuth2JWTStrategy(keyGetter, hmacStrategy, config)
+	strategy := &compose.CommonStrategy{
+		CoreStrategy:               jwtStrategy,
+		OpenIDConnectTokenStrategy: compose.NewOpenIDConnectStrategy(keyGetter, config),
+		Signer:                     &jwt.DefaultSigner{GetPrivateKey: keyGetter},
+	}
 
-	clientSecretHash, err := bcrypt.GenerateFromPassword([]byte("keston-work-secret"), 10)
+	var storageImpl interface{}
+	if cfg.DatabaseURL != "" {
+		db, err := sql.Open("pgx", cfg.DatabaseURL)
+		if err != nil {
+			log.Fatalf("failed to open database: %v", err)
+		}
+		if err := db.PingContext(context.Background()); err != nil {
+			log.Fatalf("failed to connect to database: %v", err)
+		}
+		if err := migrate(db, schemaSQL); err != nil {
+			log.Fatalf("failed to run migrations: %v", err)
+		}
+		s := NewSQLStore(db)
+		if err := s.Seed(context.Background()); err != nil {
+			log.Fatalf("failed to seed database: %v", err)
+		}
+		sqlStore = s
+		storageImpl = s
+	} else {
+		log.Println("KESTON_ID_DATABASE_URL not set — using in-memory store")
+		storageImpl = seedMemoryStore()
+	}
+
+	provider = compose.Compose(
+		config,
+		storageImpl,
+		strategy,
+		compose.OAuth2AuthorizeExplicitFactory,
+		compose.OAuth2RefreshTokenGrantFactory,
+		compose.OAuth2PKCEFactory,
+		compose.OAuth2TokenRevocationFactory,
+		compose.OAuth2StatelessJWTIntrospectionFactory,
+		compose.OpenIDConnectExplicitFactory,
+		compose.OpenIDConnectRefreshFactory,
+	)
+}
+
+func migrate(db *sql.DB, schema string) error {
+	for _, stmt := range strings.Split(schema, ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if _, err := db.ExecContext(context.Background(), stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func seedMemoryStore() *storage.MemoryStore {
+	s := storage.NewMemoryStore()
+
+	workSecret, err := bcrypt.GenerateFromPassword([]byte("keston-work-secret"), bcrypt.DefaultCost)
 	if err != nil {
 		log.Fatalf("failed to hash client secret: %v", err)
 	}
 
-	store.Clients["keston-work"] = &fosite.DefaultClient{
+	s.Clients["keston-work"] = &fosite.DefaultClient{
 		ID:            "keston-work",
-		Secret:        clientSecretHash,
+		Secret:        workSecret,
 		RedirectURIs:  []string{cfg.WorkRedirect},
 		ResponseTypes: []string{"code"},
 		GrantTypes:    []string{"authorization_code", "refresh_token"},
@@ -52,7 +127,7 @@ func init() {
 		Audience:      []string{"keston-work"},
 	}
 
-	store.Clients["keston-demo"] = &fosite.DefaultClient{
+	s.Clients["keston-demo"] = &fosite.DefaultClient{
 		ID:            "keston-demo",
 		RedirectURIs:  []string{cfg.DemoRedirect},
 		ResponseTypes: []string{"code"},
@@ -62,19 +137,7 @@ func init() {
 		Public:        true,
 	}
 
-	config = &fosite.Config{
-		AccessTokenLifespan:         time.Hour,
-		AuthorizeCodeLifespan:       time.Minute * 10,
-		IDTokenLifespan:             time.Hour,
-		RefreshTokenLifespan:        time.Hour * 24,
-		GlobalSecret:                cfg.Secret,
-		IDTokenIssuer:               cfg.Issuer,
-		TokenURL:                    cfg.Issuer + "/token",
-		SendDebugMessagesToClients:  true,
-		EnforcePKCEForPublicClients: true,
-	}
-
-	provider = compose.ComposeAllEnabled(config, store, privateKey)
+	return s
 }
 
 func main() {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -73,6 +74,13 @@ func isConsented(r *http.Request) bool {
 	return ok && data.Consented
 }
 
+func authenticateUser(ctx context.Context, username, password string) bool {
+	if sqlStore != nil {
+		return sqlStore.AuthenticateUser(ctx, username, password) == nil
+	}
+	return username == "admin" && password == "password"
+}
+
 func safeReturnTo(raw string) string {
 	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
 		return "/"
@@ -93,7 +101,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		password := r.PostForm.Get("password")
 		returnTo := safeReturnTo(r.PostForm.Get("return_to"))
 
-		if username == "admin" && password == "password" {
+		if authenticateUser(r.Context(), username, password) {
 			setSession(w, sessionData{Username: username})
 			http.Redirect(w, r, returnTo, http.StatusFound)
 			return

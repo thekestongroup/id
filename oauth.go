@@ -5,31 +5,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/ory/fosite"
-	"github.com/ory/fosite/handler/openid"
-	"github.com/ory/fosite/token/jwt"
+	"github.com/ory/fosite/handler/oauth2"
 )
-
-func newSession(user, audience string) *openid.DefaultSession {
-	return &openid.DefaultSession{
-		Claims: &jwt.IDTokenClaims{
-			Issuer:      cfg.Issuer,
-			Subject:     user,
-			Audience:    []string{audience},
-			ExpiresAt:   time.Now().Add(time.Hour),
-			IssuedAt:    time.Now(),
-			RequestedAt: time.Now(),
-			AuthTime:    time.Now(),
-			Extra: map[string]interface{}{
-				"name":  "Administrator",
-				"email": "admin@keston.local",
-			},
-		},
-		Headers: &jwt.Headers{Extra: map[string]interface{}{}},
-	}
-}
 
 func authorizeHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -65,7 +44,7 @@ func authorizeHandler(w http.ResponseWriter, r *http.Request) {
 func tokenHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	accessRequest, err := provider.NewAccessRequest(ctx, r, new(openid.DefaultSession))
+	accessRequest, err := provider.NewAccessRequest(ctx, r, newEmptySession())
 	if err != nil {
 		provider.WriteAccessError(ctx, w, accessRequest, err)
 		return
@@ -89,21 +68,22 @@ func userinfoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenType, ar, err := provider.IntrospectToken(ctx, token, fosite.AccessToken, &openid.DefaultSession{})
+	tokenType, ar, err := provider.IntrospectToken(ctx, token, fosite.AccessToken, newEmptySession())
 	if err != nil || tokenType != fosite.AccessToken {
 		writeJSONError(w, http.StatusUnauthorized, "invalid_token", "invalid or expired token")
 		return
 	}
 
-	session, ok := ar.GetSession().(*openid.DefaultSession)
-	if !ok || session.Claims == nil {
-		writeJSONError(w, http.StatusInternalServerError, "invalid_token", "session missing claims")
-		return
-	}
+	session := ar.GetSession()
+	result := map[string]interface{}{"sub": session.GetSubject()}
 
-	result := map[string]interface{}{"sub": session.Claims.Subject}
-	for k, v := range session.Claims.Extra {
-		result[k] = v
+	if jwts, ok := session.(*oauth2.JWTSession); ok {
+		claims := jwts.GetJWTClaims().ToMapClaims()
+		for _, key := range []string{"name", "email"} {
+			if v, exists := claims[key]; exists {
+				result[key] = v
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -1,6 +1,13 @@
 package main
 
-import "os"
+import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"log"
+	"os"
+)
 
 // Config holds runtime configuration, sourced from environment variables
 // (with dev-friendly defaults so `go run .` works out of the box).
@@ -39,4 +46,31 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// loadPrivateKey returns the RSA signing key from KESTON_ID_RSA_PRIVATE_KEY
+// (PEM, PKCS#1 or PKCS#8) if set, otherwise generates a fresh one. A stable key
+// is required to keep stateless JWT access tokens valid across restarts.
+func loadPrivateKey() *rsa.PrivateKey {
+	if pemStr := os.Getenv("KESTON_ID_RSA_PRIVATE_KEY"); pemStr != "" {
+		block, _ := pem.Decode([]byte(pemStr))
+		if block != nil {
+			if k, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+				if key, ok := k.(*rsa.PrivateKey); ok {
+					return key
+				}
+			}
+			if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+				return key
+			}
+		}
+		log.Fatal("failed to parse KESTON_ID_RSA_PRIVATE_KEY as a PEM RSA key")
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		log.Fatalf("failed to generate RSA key: %v", err)
+	}
+	log.Println("no KESTON_ID_RSA_PRIVATE_KEY set — generated an ephemeral key (JWT access tokens will not survive a restart)")
+	return key
 }
