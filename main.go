@@ -31,6 +31,7 @@ var (
 	config     *fosite.Config
 	provider   fosite.OAuth2Provider
 	sqlStore   *SQLStore
+	memStore   *storage.MemoryStore
 )
 
 func init() {
@@ -79,7 +80,8 @@ func init() {
 		storageImpl = s
 	} else {
 		log.Println("KESTON_ID_DATABASE_URL not set — using in-memory store")
-		storageImpl = seedMemoryStore()
+		memStore = seedMemoryStore()
+		storageImpl = memStore
 	}
 
 	provider = compose.Compose(

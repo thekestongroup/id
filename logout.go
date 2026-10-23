@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -86,12 +87,50 @@ func listRevokedSessions(ctx context.Context) ([]RevokedSession, error) {
 }
 
 func revokedSessionsHandler(w http.ResponseWriter, r *http.Request) {
+	if _, err := authenticateClient(r.Context(), r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "unauthorized"})
+		return
+	}
+
 	sessions, err := listRevokedSessions(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"sessions": sessions})
+}
+
+// authenticateClient verifies a caller's client credentials (HTTP Basic or
+// client_secret_post) against the registered clients.
+func authenticateClient(ctx context.Context, r *http.Request) (fosite.Client, error) {
+	clientID, clientSecret, ok := r.BasicAuth()
+	if !ok || clientID == "" {
+		if err := r.ParseForm(); err != nil {
+			return nil, err
+		}
+		clientID = r.PostFormValue("client_id")
+		clientSecret = r.PostFormValue("client_secret")
+	}
+	if clientID == "" || clientSecret == "" {
+		return nil, errors.New("missing client credentials")
+	}
+
+	client, err := getClient(ctx, clientID)
+	if err != nil {
+		return nil, errors.New("invalid client")
+	}
+
+	if err := config.GetSecretsHasher(ctx).Compare(ctx, client.GetHashedSecret(), []byte(clientSecret)); err != nil {
+		return nil, errors.New("invalid client secret")
+	}
+	return client, nil
+}
+
+func getClient(ctx context.Context, id string) (fosite.Client, error) {
+	if sqlStore != nil {
+		return sqlStore.GetClient(ctx, id)
+	}
+	return memStore.GetClient(ctx, id)
 }
 
 // logoutHandler clears the local session and propagates the logout to every
