@@ -75,15 +75,15 @@ type storedSession struct {
 }
 
 type storedRequest struct {
-	ID                string             `json:"id"`
-	RequestedAt       time.Time          `json:"requested_at"`
-	ClientID          string             `json:"client_id"`
-	RequestedScope    fosite.Arguments   `json:"requested_scope"`
-	GrantedScope      fosite.Arguments   `json:"granted_scope"`
-	Form              url.Values         `json:"form"`
-	Session           *storedSession     `json:"session"`
-	RequestedAudience fosite.Arguments   `json:"requested_audience"`
-	GrantedAudience   fosite.Arguments   `json:"granted_audience"`
+	ID                string           `json:"id"`
+	RequestedAt       time.Time        `json:"requested_at"`
+	ClientID          string           `json:"client_id"`
+	RequestedScope    fosite.Arguments `json:"requested_scope"`
+	GrantedScope      fosite.Arguments `json:"granted_scope"`
+	Form              url.Values       `json:"form"`
+	Session           *storedSession   `json:"session"`
+	RequestedAudience fosite.Arguments `json:"requested_audience"`
+	GrantedAudience   fosite.Arguments `json:"granted_audience"`
 }
 
 func toStoredSession(s fosite.Session) *storedSession {
@@ -513,4 +513,36 @@ func (s *SQLStore) IsSessionRevoked(ctx context.Context, sid string) (bool, erro
 	var count int
 	err := s.conn(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM revoked_sessions WHERE sid = $1`, sid).Scan(&count)
 	return count > 0, err
+}
+
+// RevokedSession is a revoked session ID with the time it was revoked.
+type RevokedSession struct {
+	SID       string    `json:"sid"`
+	RevokedAt time.Time `json:"revoked_at"`
+}
+
+// ListRevokedSessions returns revoked sessions newer than the retention window,
+// pruning anything older (they only matter until the access token would have
+// expired anyway).
+func (s *SQLStore) ListRevokedSessions(ctx context.Context, retention time.Duration) ([]RevokedSession, error) {
+	cutoff := time.Now().Add(-retention)
+	if _, err := s.conn(ctx).ExecContext(ctx, `DELETE FROM revoked_sessions WHERE revoked_at < $1`, cutoff); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.conn(ctx).QueryContext(ctx, `SELECT sid, revoked_at FROM revoked_sessions ORDER BY revoked_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []RevokedSession
+	for rows.Next() {
+		var rs RevokedSession
+		if err := rows.Scan(&rs.SID, &rs.RevokedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, rs)
+	}
+	return out, rows.Err()
 }

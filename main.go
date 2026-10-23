@@ -153,6 +153,7 @@ func main() {
 	mux.HandleFunc("/consent", consentHandler)
 	mux.HandleFunc("/logout", logoutHandler)
 	mux.HandleFunc("/introspect", introspectHandler)
+	mux.HandleFunc("/revoked-sessions", revokedSessionsHandler)
 	mux.HandleFunc("/.well-known/jwks.json", jwksHandler)
 	mux.HandleFunc("/.well-known/openid-configuration", discoveryHandler)
 	mux.HandleFunc("/", webHandler)

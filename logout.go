@@ -17,9 +17,9 @@ import (
 
 // Memory fallbacks (used when KESTON_ID_DATABASE_URL is not set).
 var (
-	mu                     sync.Mutex
-	memoryBackchannelURIs  = map[string]string{}
-	memoryRevokedSessions  = map[string]bool{}
+	mu                    sync.Mutex
+	memoryBackchannelURIs = map[string]string{}
+	memoryRevokedSessions = map[string]time.Time{}
 )
 
 func backchannelLogoutURIs(ctx context.Context) (map[string]string, error) {
@@ -44,7 +44,7 @@ func revokeSession(ctx context.Context, sid string) error {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	memoryRevokedSessions[sid] = true
+	memoryRevokedSessions[sid] = time.Now()
 	return nil
 }
 
@@ -57,7 +57,41 @@ func isSessionRevoked(ctx context.Context, sid string) (bool, error) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	return memoryRevokedSessions[sid], nil
+	_, ok := memoryRevokedSessions[sid]
+	return ok, nil
+}
+
+// listRevokedSessions returns the revoked sessions an app server needs to
+// (re)build its local blocked list, pruning entries older than the retention
+// window.
+func listRevokedSessions(ctx context.Context) ([]RevokedSession, error) {
+	retention := cfg.AccessTokenLifespan + time.Minute
+	if sqlStore != nil {
+		return sqlStore.ListRevokedSessions(ctx, retention)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	cutoff := time.Now().Add(-retention)
+	for sid, at := range memoryRevokedSessions {
+		if at.Before(cutoff) {
+			delete(memoryRevokedSessions, sid)
+		}
+	}
+	out := make([]RevokedSession, 0, len(memoryRevokedSessions))
+	for sid, at := range memoryRevokedSessions {
+		out = append(out, RevokedSession{SID: sid, RevokedAt: at})
+	}
+	return out, nil
+}
+
+func revokedSessionsHandler(w http.ResponseWriter, r *http.Request) {
+	sessions, err := listRevokedSessions(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"sessions": sessions})
 }
 
 // logoutHandler clears the local session and propagates the logout to every
