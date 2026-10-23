@@ -14,7 +14,7 @@ RUN pnpm build
 # ---- Stage 2: build the Go binary ----
 FROM golang:1.27-alpine AS builder
 WORKDIR /app
-COPY go.mod go.sum ./
+COPY go.* ./
 RUN go mod download
 COPY . .
 COPY --from=web /app/dist ./web/dist
