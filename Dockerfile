@@ -3,10 +3,7 @@
 # ---- Stage 1: build the login/consent web UI ----
 FROM node:22-alpine AS web
 WORKDIR /app
-# NPM_TOKEN is a GitHub PAT with read:packages, passed via docker build --build-arg.
-ARG NPM_TOKEN
 COPY web/package.json web/pnpm-lock.yaml web/.npmrc ./
-RUN echo "//npm.pkg.github.com/:_authToken=${NPM_TOKEN}" >> .npmrc
 RUN corepack enable && corepack prepare pnpm@11.6.0 --activate && pnpm install
 COPY web/ ./
 RUN pnpm build
