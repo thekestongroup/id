@@ -3,7 +3,7 @@
 # ---- Stage 1: build the login/consent web UI ----
 FROM node:22-alpine AS web
 WORKDIR /app
-COPY web/package.json web/pnpm-lock.yaml web/.npmrc ./
+COPY web/package.json web/pnpm-lock.yaml ./
 RUN corepack enable && corepack prepare pnpm@11.6.0 --activate && pnpm install
 COPY web/ ./
 RUN pnpm build
