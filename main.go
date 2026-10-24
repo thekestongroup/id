@@ -139,8 +139,24 @@ func seedMemoryStore() *storage.MemoryStore {
 		Public:        true,
 	}
 
+	adminSecret, err := bcrypt.GenerateFromPassword([]byte("keston-admin-secret"), bcrypt.DefaultCost)
+	if err != nil {
+		log.Fatalf("failed to hash client secret: %v", err)
+	}
+
+	s.Clients["keston-admin"] = &fosite.DefaultClient{
+		ID:            "keston-admin",
+		Secret:        adminSecret,
+		RedirectURIs:  []string{cfg.AdminRedirect},
+		ResponseTypes: []string{"code"},
+		GrantTypes:    []string{"authorization_code", "refresh_token"},
+		Scopes:        []string{"openid", "profile", "email", "offline_access"},
+		Audience:      []string{"keston-admin"},
+	}
+
 	mu.Lock()
 	memoryBackchannelURIs["keston-work"] = cfg.WorkLogoutURI
+	memoryBackchannelURIs["keston-admin"] = cfg.AdminLogoutURI
 	mu.Unlock()
 
 	return s
@@ -155,6 +171,7 @@ func main() {
 	mux.HandleFunc("/consent", consentHandler)
 	mux.HandleFunc("/logout", logoutHandler)
 	mux.HandleFunc("/api/accounts", accountsHandler)
+	mux.HandleFunc("/api/users", usersHandler)
 	mux.HandleFunc("/introspect", introspectHandler)
 	mux.HandleFunc("/revoked-sessions", revokedSessionsHandler)
 	mux.HandleFunc("/.well-known/jwks.json", jwksHandler)

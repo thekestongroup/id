@@ -13,13 +13,15 @@ import (
 // Config holds runtime configuration, sourced from environment variables
 // (with dev-friendly defaults so `go run .` works out of the box).
 type Config struct {
-	Issuer             string
-	Addr               string
-	Secret             []byte
-	WorkRedirect       string
-	DemoRedirect       string
-	WorkLogoutURI      string
-	DatabaseURL        string
+	Issuer              string
+	Addr                string
+	Secret              []byte
+	WorkRedirect        string
+	DemoRedirect        string
+	WorkLogoutURI       string
+	AdminRedirect       string
+	AdminLogoutURI      string
+	DatabaseURL         string
 	AccessTokenLifespan time.Duration
 }
 
@@ -48,6 +50,8 @@ func loadConfig() *Config {
 		WorkRedirect:        envOr("KESTON_ID_WORK_REDIRECT_URI", "http://localhost:3001/callback"),
 		DemoRedirect:        envOr("KESTON_ID_DEMO_REDIRECT_URI", "http://localhost:3000/callback"),
 		WorkLogoutURI:       envOr("KESTON_ID_WORK_LOGOUT_URI", "http://localhost:3001/backchannel-logout"),
+		AdminRedirect:       envOr("KESTON_ID_ADMIN_REDIRECT_URI", "http://localhost:3002/callback"),
+		AdminLogoutURI:      envOr("KESTON_ID_ADMIN_LOGOUT_URI", "http://localhost:3002/backchannel-logout"),
 		DatabaseURL:         os.Getenv("KESTON_ID_DATABASE_URL"),
 		AccessTokenLifespan: lifespan,
 	}

@@ -134,14 +134,10 @@ func authenticateUser(ctx context.Context, username, password string) bool {
 	if sqlStore != nil {
 		return sqlStore.AuthenticateUser(ctx, username, password) == nil
 	}
-	// Dev fallback users (no database).
-	switch username {
-	case "admin":
-		return password == "password"
-	case "john@oakside.com":
-		return password == "password"
-	}
-	return false
+	mu.Lock()
+	defer mu.Unlock()
+	u, ok := memoryUsers[username]
+	return ok && u.Password == password
 }
 
 func safeReturnTo(raw string) string {

@@ -417,6 +417,44 @@ func (s *SQLStore) AuthenticateUser(ctx context.Context, username, password stri
 	return nil
 }
 
+// User is a Keston ID user (login identifier is the username/email).
+type User struct {
+	Username string `json:"username"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+}
+
+func (s *SQLStore) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.conn(ctx).QueryContext(ctx, `SELECT username, name, email FROM users ORDER BY username`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.Username, &u.Name, &u.Email); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) CreateUser(ctx context.Context, username, passwordHash, name, email string) error {
+	_, err := s.conn(ctx).ExecContext(ctx,
+		`INSERT INTO users (id, username, password_hash, name, email) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (username) DO NOTHING`,
+		randomID(), username, passwordHash, name, email,
+	)
+	return err
+}
+
+func (s *SQLStore) GetUserInfo(ctx context.Context, username string) (name, email string, err error) {
+	err = s.conn(ctx).QueryRowContext(ctx, `SELECT name, email FROM users WHERE username = $1`, username).Scan(&name, &email)
+	return
+}
+
 // --- Helpers -----------------------------------------------------------------
 
 func parseStrings(raw string) []string {
@@ -473,6 +511,24 @@ func (s *SQLStore) Seed(ctx context.Context) error {
 		encodeStrings([]string{"code"}),
 		encodeStrings([]string{"openid", "profile", "email", "offline_access"}),
 		encodeStrings([]string{"keston-demo"}),
+	); err != nil {
+		return err
+	}
+
+	adminSecret, err := bcrypt.GenerateFromPassword([]byte("keston-admin-secret"), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO clients (id, secret, redirect_uris, grant_types, response_types, scopes, audience, public, backchannel_logout_uri)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8)
+		 ON CONFLICT (id) DO NOTHING`,
+		"keston-admin", string(adminSecret), encodeStrings([]string{cfg.AdminRedirect}),
+		encodeStrings([]string{"authorization_code", "refresh_token"}),
+		encodeStrings([]string{"code"}),
+		encodeStrings([]string{"openid", "profile", "email", "offline_access"}),
+		encodeStrings([]string{"keston-admin"}),
+		cfg.AdminLogoutURI,
 	); err != nil {
 		return err
 	}

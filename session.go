@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"time"
 
 	"github.com/ory/fosite"
@@ -16,10 +17,11 @@ type Session struct {
 	IDHeaders *jwt.Headers
 }
 
-func newSession(user, audience, sid string) *Session {
+func newSession(ctx context.Context, user, audience, sid string) *Session {
+	name, email := getUserInfo(ctx, user)
 	extra := map[string]interface{}{
-		"name":  "Administrator",
-		"email": "admin@keston.local",
+		"name":  name,
+		"email": email,
 	}
 	if sid != "" {
 		extra["sid"] = sid

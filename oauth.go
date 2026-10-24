@@ -34,7 +34,7 @@ func authorizeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sess, _ := currentSession(r)
-	response, err := provider.NewAuthorizeResponse(ctx, ar, newSession(sess.Username, ar.GetClient().GetID(), sess.SID))
+	response, err := provider.NewAuthorizeResponse(ctx, ar, newSession(ctx, sess.Username, ar.GetClient().GetID(), sess.SID))
 	if err != nil {
 		provider.WriteAuthorizeError(ctx, w, ar, err)
 		return
