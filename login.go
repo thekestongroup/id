@@ -19,7 +19,7 @@ type sessionData struct {
 	SID       string `json:"sid"`
 }
 
-const sessionCookieName = "keston_session"
+const sessionCookieName = "keston_sessions"
 
 func sign(msg string) string {
 	mac := hmac.New(sha256.New, cfg.Secret)
@@ -27,8 +27,8 @@ func sign(msg string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func setSession(w http.ResponseWriter, data sessionData) {
-	payload, _ := json.Marshal(data)
+func setSessions(w http.ResponseWriter, sessions []sessionData) {
+	payload, _ := json.Marshal(sessions)
 	encoded := base64.RawURLEncoding.EncodeToString(payload)
 	value := encoded + "." + sign(encoded)
 	http.SetCookie(w, &http.Cookie{
@@ -41,43 +41,87 @@ func setSession(w http.ResponseWriter, data sessionData) {
 	})
 }
 
-func getSession(r *http.Request) (sessionData, bool) {
+func getSessions(r *http.Request) []sessionData {
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil {
-		return sessionData{}, false
+		return nil
 	}
 	parts := strings.SplitN(c.Value, ".", 2)
 	if len(parts) != 2 {
-		return sessionData{}, false
+		return nil
 	}
 	if !hmac.Equal([]byte(sign(parts[0])), []byte(parts[1])) {
-		return sessionData{}, false
+		return nil
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
+		return nil
+	}
+	var sessions []sessionData
+	if err := json.Unmarshal(payload, &sessions); err != nil {
+		return nil
+	}
+	return sessions
+}
+
+func clearSessions(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, MaxAge: -1, Path: "/"})
+}
+
+// currentSession returns the active session (the last one in the list).
+func currentSession(r *http.Request) (sessionData, bool) {
+	sessions := getSessions(r)
+	if len(sessions) == 0 {
 		return sessionData{}, false
 	}
-	var data sessionData
-	if err := json.Unmarshal(payload, &data); err != nil {
-		return sessionData{}, false
-	}
-	return data, true
+	return sessions[len(sessions)-1], true
 }
 
 func currentUser(r *http.Request) string {
-	if data, ok := getSession(r); ok {
+	if data, ok := currentSession(r); ok {
 		return data.Username
 	}
 	return ""
 }
 
-func currentSession(r *http.Request) (sessionData, bool) {
-	return getSession(r)
+func isConsented(r *http.Request) bool {
+	data, ok := currentSession(r)
+	return ok && data.Consented
 }
 
-func isConsented(r *http.Request) bool {
-	data, ok := getSession(r)
-	return ok && data.Consented
+// addSession adds (or replaces) a session for the given user and makes it active.
+func addSession(w http.ResponseWriter, r *http.Request, username string) {
+	sessions := getSessions(r)
+	filtered := sessions[:0]
+	for _, s := range sessions {
+		if s.Username != username {
+			filtered = append(filtered, s)
+		}
+	}
+	filtered = append(filtered, sessionData{Username: username, SID: randomID()})
+	setSessions(w, filtered)
+}
+
+// removeSession removes the session with the given sid.
+func removeSession(w http.ResponseWriter, r *http.Request, sid string) {
+	sessions := getSessions(r)
+	filtered := sessions[:0]
+	for _, s := range sessions {
+		if s.SID != sid {
+			filtered = append(filtered, s)
+		}
+	}
+	setSessions(w, filtered)
+}
+
+// markActiveConsented marks the active session as consented.
+func markActiveConsented(w http.ResponseWriter, r *http.Request) {
+	sessions := getSessions(r)
+	if len(sessions) == 0 {
+		return
+	}
+	sessions[len(sessions)-1].Consented = true
+	setSessions(w, sessions)
 }
 
 func randomID() string {
@@ -90,7 +134,14 @@ func authenticateUser(ctx context.Context, username, password string) bool {
 	if sqlStore != nil {
 		return sqlStore.AuthenticateUser(ctx, username, password) == nil
 	}
-	return username == "admin" && password == "password"
+	// Dev fallback users (no database).
+	switch username {
+	case "admin":
+		return password == "password"
+	case "john@oakside.com":
+		return password == "password"
+	}
+	return false
 }
 
 func safeReturnTo(raw string) string {
@@ -114,7 +165,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		returnTo := safeReturnTo(r.PostForm.Get("return_to"))
 
 		if authenticateUser(r.Context(), username, password) {
-			setSession(w, sessionData{Username: username, SID: randomID()})
+			addSession(w, r, username)
 			http.Redirect(w, r, returnTo, http.StatusFound)
 			return
 		}
@@ -137,8 +188,7 @@ func consentHandler(w http.ResponseWriter, r *http.Request) {
 		returnTo := safeReturnTo(r.PostForm.Get("return_to"))
 		action := r.PostForm.Get("action")
 
-		data, ok := getSession(r)
-		if !ok {
+		if _, ok := currentSession(r); !ok {
 			http.Redirect(w, r, "/login?return_to="+url.QueryEscape(returnTo), http.StatusFound)
 			return
 		}
@@ -148,8 +198,7 @@ func consentHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		data.Consented = true
-		setSession(w, data)
+		markActiveConsented(w, r)
 		http.Redirect(w, r, returnTo, http.StatusFound)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

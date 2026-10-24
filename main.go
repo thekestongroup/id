@@ -154,6 +154,7 @@ func main() {
 	mux.HandleFunc("/login", loginHandler)
 	mux.HandleFunc("/consent", consentHandler)
 	mux.HandleFunc("/logout", logoutHandler)
+	mux.HandleFunc("/api/accounts", accountsHandler)
 	mux.HandleFunc("/introspect", introspectHandler)
 	mux.HandleFunc("/revoked-sessions", revokedSessionsHandler)
 	mux.HandleFunc("/.well-known/jwks.json", jwksHandler)

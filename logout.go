@@ -133,17 +133,57 @@ func getClient(ctx context.Context, id string) (fosite.Client, error) {
 	return memStore.GetClient(ctx, id)
 }
 
-// logoutHandler clears the local session and propagates the logout to every
-// relying party via OpenID Connect Back-Channel Logout.
+// logoutHandler shows the account switcher on GET and signs out a specific
+// account (or all accounts) on POST, propagating each via back-channel logout.
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
-	sess, ok := getSession(r)
-	if ok {
-		_ = revokeSession(r.Context(), sess.SID)
-		go triggerBackchannelLogout(context.Background(), sess.Username, sess.SID)
-	}
+	switch r.Method {
+	case http.MethodGet:
+		serveIndex(w)
+	case http.MethodPost:
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 
-	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, MaxAge: -1, Path: "/"})
-	http.Redirect(w, r, "/", http.StatusFound)
+		if r.PostForm.Get("action") == "all" {
+			for _, s := range getSessions(r) {
+				_ = revokeSession(r.Context(), s.SID)
+				go triggerBackchannelLogout(context.Background(), s.Username, s.SID)
+			}
+			clearSessions(w)
+			http.Redirect(w, r, "/", http.StatusFound)
+			return
+		}
+
+		if sid := r.PostForm.Get("sid"); sid != "" {
+			for _, s := range getSessions(r) {
+				if s.SID == sid {
+					_ = revokeSession(r.Context(), s.SID)
+					go triggerBackchannelLogout(context.Background(), s.Username, s.SID)
+					removeSession(w, r, sid)
+					break
+				}
+			}
+		}
+		http.Redirect(w, r, "/logout", http.StatusFound)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// accountsHandler returns the signed-in accounts (active first) for the account
+// switcher UI.
+func accountsHandler(w http.ResponseWriter, r *http.Request) {
+	sessions := getSessions(r)
+	accounts := make([]map[string]interface{}, 0, len(sessions))
+	for i := len(sessions) - 1; i >= 0; i-- {
+		accounts = append(accounts, map[string]interface{}{
+			"username": sessions[i].Username,
+			"sid":      sessions[i].SID,
+			"active":   i == len(sessions)-1,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"accounts": accounts})
 }
 
 func triggerBackchannelLogout(ctx context.Context, sub, sid string) {
