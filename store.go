@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"time"
 
@@ -403,13 +404,16 @@ func (s *SQLStore) DeletePKCERequestSession(ctx context.Context, signature strin
 // --- Users -------------------------------------------------------------------
 
 func (s *SQLStore) AuthenticateUser(ctx context.Context, username, password string) error {
-	var hash string
-	err := s.conn(ctx).QueryRowContext(ctx, `SELECT password_hash FROM users WHERE username = $1`, username).Scan(&hash)
+	var hash, status string
+	err := s.conn(ctx).QueryRowContext(ctx, `SELECT password_hash, status FROM users WHERE username = $1`, username).Scan(&hash, &status)
 	if err == sql.ErrNoRows {
 		return fosite.ErrNotFound
 	}
 	if err != nil {
 		return err
+	}
+	if status != "" && status != "active" {
+		return fosite.ErrNotFound.WithHint("account disabled")
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		return fosite.ErrNotFound.WithHint("invalid credentials")
@@ -422,10 +426,11 @@ type User struct {
 	Username string `json:"username"`
 	Name     string `json:"name"`
 	Email    string `json:"email"`
+	Status   string `json:"status"`
 }
 
 func (s *SQLStore) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := s.conn(ctx).QueryContext(ctx, `SELECT username, name, email FROM users ORDER BY username`)
+	rows, err := s.conn(ctx).QueryContext(ctx, `SELECT username, name, email, status FROM users ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
@@ -434,7 +439,7 @@ func (s *SQLStore) ListUsers(ctx context.Context) ([]User, error) {
 	var out []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.Username, &u.Name, &u.Email); err != nil {
+		if err := rows.Scan(&u.Username, &u.Name, &u.Email, &u.Status); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -443,10 +448,36 @@ func (s *SQLStore) ListUsers(ctx context.Context) ([]User, error) {
 }
 
 func (s *SQLStore) CreateUser(ctx context.Context, username, passwordHash, name, email string) error {
-	_, err := s.conn(ctx).ExecContext(ctx,
+	res, err := s.conn(ctx).ExecContext(ctx,
 		`INSERT INTO users (id, username, password_hash, name, email) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (username) DO NOTHING`,
 		randomID(), username, passwordHash, name, email,
 	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errors.New("user already exists")
+	}
+	return nil
+}
+
+func (s *SQLStore) UpdateUser(ctx context.Context, username, name, email string) error {
+	_, err := s.conn(ctx).ExecContext(ctx, `UPDATE users SET name = $1, email = $2 WHERE username = $3`, name, email, username)
+	return err
+}
+
+func (s *SQLStore) DeleteUser(ctx context.Context, username string) error {
+	_, err := s.conn(ctx).ExecContext(ctx, `DELETE FROM users WHERE username = $1`, username)
+	return err
+}
+
+func (s *SQLStore) SetUserPassword(ctx context.Context, username, passwordHash string) error {
+	_, err := s.conn(ctx).ExecContext(ctx, `UPDATE users SET password_hash = $1 WHERE username = $2`, passwordHash, username)
+	return err
+}
+
+func (s *SQLStore) SetUserStatus(ctx context.Context, username, status string) error {
+	_, err := s.conn(ctx).ExecContext(ctx, `UPDATE users SET status = $1 WHERE username = $2`, status, username)
 	return err
 }
 

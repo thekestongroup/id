@@ -17,8 +17,11 @@ CREATE TABLE IF NOT EXISTS users (
     username      TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     name          TEXT NOT NULL DEFAULT '',
-    email         TEXT NOT NULL DEFAULT ''
+    email         TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'active'
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
 
 CREATE TABLE IF NOT EXISTS authorize_codes (
     code    TEXT PRIMARY KEY,

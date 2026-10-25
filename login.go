@@ -137,7 +137,7 @@ func authenticateUser(ctx context.Context, username, password string) bool {
 	mu.Lock()
 	defer mu.Unlock()
 	u, ok := memoryUsers[username]
-	return ok && u.Password == password
+	return ok && u.Status == "active" && u.Password == password
 }
 
 func safeReturnTo(raw string) string {
