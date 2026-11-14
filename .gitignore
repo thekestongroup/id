@@ -1,14 +1,10 @@
-# Node
-node_modules/
-
-# Demo build output (test client runs via `pnpm dev`, not embedded)
-demo/dist/
-
-# Logs
-*.log
-
-# Compiled binary
-/keston-id
-/id
-
+node_modules
+dist
+*.local
+*.tsbuildinfo
 .DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json
+.env
+.vite

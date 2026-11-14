@@ -1,0 +1,13 @@
+[
+  {
+    "id": "demo",
+    "name": "Keston Demo",
+    "publisher": "The Keston Group",
+    "verification": "owned",
+    "redirectUris": ["http://localhost:3000/callback"],
+    "postLogoutRedirectUris": ["http://localhost:3000/"],
+    "requiredScopes": ["openid", "profile", "email"],
+    "optionalScopes": ["students:read", "offline_access"],
+    "devMode": true
+  }
+]

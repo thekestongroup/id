@@ -1,0 +1,208 @@
+// Package store is Keston ID's data access: every query lives here.
+package store
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/thekestongroup/id/internal/secret"
+)
+
+var ErrNotFound = errors.New("not found")
+
+type Store struct {
+	DB  *pgxpool.Pool
+	Box *secret.Box
+}
+
+func New(db *pgxpool.Pool, box *secret.Box) *Store { return &Store{DB: db, Box: box} }
+
+func notFound(err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
+// ── Users ────────────────────────────────────────────────────────────────
+
+type User struct {
+	ID                string
+	Email             string
+	Name              string
+	Organisation      string
+	PasswordHash      string
+	PasswordChangedAt time.Time
+	TOTPSecret        []byte // encrypted
+	TOTPEnabled       bool
+	BackupCodes       []string
+	Status            string
+	FailedLogins      int
+	LockedUntil       *time.Time
+	CreatedAt         time.Time
+}
+
+const userColumns = `id, email, name, organisation, password_hash, password_changed_at, totp_secret, totp_enabled,
+	backup_codes, status, failed_logins, locked_until, created_at`
+
+func scanUser(row pgx.Row) (*User, error) {
+	var u User
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Organisation, &u.PasswordHash, &u.PasswordChangedAt, &u.TOTPSecret,
+		&u.TOTPEnabled, &u.BackupCodes, &u.Status, &u.FailedLogins, &u.LockedUntil, &u.CreatedAt)
+	if err != nil {
+		return nil, notFound(err)
+	}
+	return &u, nil
+}
+
+func (s *Store) UserByID(ctx context.Context, id string) (*User, error) {
+	return scanUser(s.DB.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id))
+}
+
+func (s *Store) UserByEmail(ctx context.Context, email string) (*User, error) {
+	return scanUser(s.DB.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE lower(email) = lower($1)`, email))
+}
+
+func (s *Store) CreateUser(ctx context.Context, email, name, organisation, passwordHash string) (*User, error) {
+	return scanUser(s.DB.QueryRow(ctx, `INSERT INTO users (email, name, organisation, password_hash)
+		VALUES ($1, $2, $3, $4) RETURNING `+userColumns, email, name, organisation, passwordHash))
+}
+
+// RecordLogin counts failed attempts; five in a row lock the account for 15
+// minutes, which slows password guessing across every replica.
+func (s *Store) RecordLogin(ctx context.Context, userID string, ok bool) error {
+	if ok {
+		_, err := s.DB.Exec(ctx, `UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1`, userID)
+		return err
+	}
+	_, err := s.DB.Exec(ctx, `UPDATE users SET failed_logins = failed_logins + 1,
+		locked_until = CASE WHEN failed_logins + 1 >= 5 THEN now() + interval '15 minutes' ELSE locked_until END
+		WHERE id = $1`, userID)
+	return err
+}
+
+func (s *Store) SetPassword(ctx context.Context, userID, hash string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE users SET password_hash = $2, password_changed_at = now(), updated_at = now()
+		WHERE id = $1`, userID, hash)
+	return err
+}
+
+// SetTOTP stores a new (encrypted) secret, not yet enabled.
+func (s *Store) SetTOTP(ctx context.Context, userID string, encrypted []byte) error {
+	_, err := s.DB.Exec(ctx, `UPDATE users SET totp_secret = $2, totp_enabled = FALSE, updated_at = now() WHERE id = $1`,
+		userID, encrypted)
+	return err
+}
+
+func (s *Store) EnableTOTP(ctx context.Context, userID string, backupCodeHashes []string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE users SET totp_enabled = TRUE, backup_codes = $2, updated_at = now() WHERE id = $1`,
+		userID, backupCodeHashes)
+	return err
+}
+
+func (s *Store) DisableTOTP(ctx context.Context, userID string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE users SET totp_enabled = FALSE, totp_secret = NULL, backup_codes = '{}',
+		updated_at = now() WHERE id = $1`, userID)
+	return err
+}
+
+// UseBackupCode removes a backup code if it's there, so each works once.
+func (s *Store) UseBackupCode(ctx context.Context, userID, codeHash string) (bool, error) {
+	tag, err := s.DB.Exec(ctx, `UPDATE users SET backup_codes = array_remove(backup_codes, $2)
+		WHERE id = $1 AND $2 = ANY (backup_codes)`, userID, codeHash)
+	return tag.RowsAffected() == 1, err
+}
+
+// ── Sessions ─────────────────────────────────────────────────────────────
+
+type Session struct {
+	ID         string
+	UserID     string
+	Stage      string
+	AMR        []string
+	AuthTime   time.Time
+	UserAgent  string
+	IP         string
+	CreatedAt  time.Time
+	LastSeenAt time.Time
+	ExpiresAt  time.Time
+}
+
+const sessionColumns = `id, user_id, stage, amr, auth_time, user_agent, ip, created_at, last_seen_at, expires_at`
+
+func scanSession(row pgx.Row) (*Session, error) {
+	var x Session
+	if err := row.Scan(&x.ID, &x.UserID, &x.Stage, &x.AMR, &x.AuthTime, &x.UserAgent, &x.IP, &x.CreatedAt,
+		&x.LastSeenAt, &x.ExpiresAt); err != nil {
+		return nil, notFound(err)
+	}
+	return &x, nil
+}
+
+// CreateSession returns the cookie token; only its hash is stored.
+func (s *Store) CreateSession(ctx context.Context, userID, stage string, amr []string, userAgent, ip string,
+	ttl time.Duration) (string, *Session, error) {
+	token := secret.Token()
+	x, err := scanSession(s.DB.QueryRow(ctx, `INSERT INTO sessions (id, user_id, stage, amr, user_agent, ip, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval) RETURNING `+sessionColumns,
+		secret.Hash(token), userID, stage, amr, userAgent, ip, ttl))
+	return token, x, err
+}
+
+// SessionByToken finds a live session and notes it was used.
+func (s *Store) SessionByToken(ctx context.Context, token string) (*Session, error) {
+	return scanSession(s.DB.QueryRow(ctx, `UPDATE sessions SET last_seen_at = now()
+		WHERE id = $1 AND expires_at > now() RETURNING `+sessionColumns, secret.Hash(token)))
+}
+
+// VerifySession records the second step.
+func (s *Store) VerifySession(ctx context.Context, id string, method string) (*Session, error) {
+	return scanSession(s.DB.QueryRow(ctx, `UPDATE sessions SET stage = 'verified', amr = array_append(amr, $2),
+		auth_time = now() WHERE id = $1 RETURNING `+sessionColumns, id, method))
+}
+
+func (s *Store) DeleteSession(ctx context.Context, id string) error {
+	_, err := s.DB.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, id)
+	return err
+}
+
+func (s *Store) SessionsForUser(ctx context.Context, userID string) ([]Session, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+sessionColumns+` FROM sessions
+		WHERE user_id = $1 AND expires_at > now() ORDER BY last_seen_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Session, error) {
+		x, err := scanSession(r)
+		if err != nil {
+			return Session{}, err
+		}
+		return *x, nil
+	})
+}
+
+// DeleteOtherSessions signs someone out everywhere else, e.g. after a
+// password change.
+func (s *Store) DeleteOtherSessions(ctx context.Context, userID, keepID string) error {
+	_, err := s.DB.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1 AND id <> $2`, userID, keepID)
+	return err
+}
+
+// Cleanup deletes expired rows. Safe to run on every replica.
+func (s *Store) Cleanup(ctx context.Context) error {
+	for _, q := range []string{
+		`DELETE FROM sessions WHERE expires_at < now()`,
+		`DELETE FROM auth_requests WHERE expires_at < now()`,
+		`DELETE FROM access_tokens WHERE expires_at < now()`,
+		`DELETE FROM refresh_tokens WHERE expires_at < now()`,
+	} {
+		if _, err := s.DB.Exec(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}

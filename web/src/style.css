@@ -1,2 +1,6 @@
 @import "tailwindcss";
-@source "../node_modules/@thekestongroup/ui/src";
+@import "@thekestongroup/ui/theme.css";
+
+body {
+  @apply bg-background font-sans text-black antialiased;
+}

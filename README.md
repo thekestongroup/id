@@ -1,112 +1,141 @@
 # Keston ID
 
-OIDC/OAuth2 identity provider for the Keston suite. Built with **Go + fosite** on
-the backend and a **Vue** login/consent UI using the
-[`@thekestongroup/ui`](https://github.com/thekestongroup/ui) component library.
+The OpenID Connect identity provider for every Keston app, at
+**https://id.keston.co**. People sign in once with their Keston account;
+apps (Keston Learn, Keston Schools, Keston Work, partners) get standard
+OIDC tokens.
+
+- **Backend:** Go, [zitadel/oidc](https://github.com/zitadel/oidc) (OpenID
+  Certified) for the protocol, Postgres for everything else.
+- **Frontend:** Vue 3 + [Keston UI](https://ui.keston.co), built from Keston
+  UI's "Examples/Keston ID" and "Examples/App pages" stories, embedded in the
+  Go binary.
+- **Runs as:** one small, stateless container. All state (sessions, signing
+  keys, tokens) is in Postgres, so you can run as many replicas as you like
+  behind a load balancer with no sticky sessions, and move to Kubernetes
+  later without changes.
+
+## What it does
+
+| | |
+|---|---|
+| OIDC / OAuth 2.0 | Authorization code flow with PKCE, refresh tokens (rotated on every use), JWT access tokens (RS256), userinfo, introspection, revocation, RP-initiated logout, discovery |
+| Sign-in | Email and password (Argon2id), failed attempts lock the account for 15 minutes after 5 tries |
+| Two-step verification | Authenticator app (TOTP), 10 one-time backup codes |
+| Consent | Required and optional scopes; remembered per app; Keston's own apps can skip it |
+| Account pages | Profile, where you're signed in (sign out other devices), password, two-step, connected apps (remove access) |
+| Operations | Migrations and signing-key creation guarded by Postgres advisory locks, signing-key rotation every 90 days, hourly cleanup, `/healthz` and `/readyz`, JSON logs, graceful shutdown |
+
+Not yet: passkeys (WebAuthn), password reset by email, back-channel logout
+to apps, an admin UI for users and apps (use the CLI below for now).
+
+## Layout
+
+```
+cmd/keston-id/       main: serve, migrate, clients sync, users create, healthcheck
+internal/config/     settings from environment variables
+internal/db/         Postgres pool, migrations (db/migrations/*.sql)
+internal/store/      every SQL query
+internal/oidcstore/  zitadel/oidc's op.Storage on top of the store
+internal/api/        JSON API for the web UI (/api/…)
+internal/server/     routes: OIDC endpoints, /api, the web UI, health checks
+internal/secret/     AES-GCM for secrets at rest, Argon2id, random tokens
+web/                 Vue + Keston UI; web/dist is embedded by web/embed.go
+deploy/              apps (OAuth clients) to register
+```
 
 ## Endpoints
 
-| Endpoint | Description |
-| --- | --- |
-| `/authorize` | OAuth2 / OIDC authorization endpoint |
-| `/token` | Token endpoint |
-| `/userinfo` | OpenID Connect UserInfo endpoint |
-| `/.well-known/jwks.json` | JSON Web Key Set (RS256) |
-| `/.well-known/openid-configuration` | OIDC discovery document |
-| `/login` | Login page (Vue) |
-| `/consent` | Consent page (Vue) |
+| Path | |
+|---|---|
+| `/.well-known/openid-configuration` | Discovery |
+| `/authorize` | Starts sign-in; sends people to `/sign-in?authRequestID=…` |
+| `/oauth/token`, `/userinfo`, `/keys`, `/revoke`, `/oauth/introspect`, `/end_session` | Standard OIDC |
+| `/sign-in`, `/two-step`, `/consent` | The sign-in pages |
+| `/account` | Account pages |
+| `/healthz`, `/readyz` | Liveness, and readiness (database reachable) |
 
-Issuer: `http://localhost:4444`
+## Run it locally
 
-## Running
+Needs Go 1.27+, pnpm and Postgres.
 
-```sh
-make build   # installs web deps, builds the Vue UI, then builds the Go binary
-./keston-id  # serves on :4444
+```bash
+createdb keston_id
 ```
 
-Or, for development, run the two halves separately:
-
-```sh
-# terminal 1 — Go server (serves a placeholder until the web build exists)
-go run .
-
-# terminal 2 — Vue UI with HMR
-cd web && pnpm dev
+```bash
+pnpm -C web install && pnpm -C web build
 ```
 
-## Demo test app
-
-`demo/` is a browser test client (like the Keston UI demo) that exercises the
-service end-to-end: discovery, JWKS, authorization code + PKCE, token exchange
-and userinfo. It registers as the public `keston-demo` client.
-
-```sh
-# terminal 1 — Keston ID
-./keston-id
-
-# terminal 2 — demo test client (http://localhost:3000)
-cd demo && pnpm install && pnpm dev
+```bash
+export KESTON_ID_DATABASE_URL="postgres://localhost:5432/keston_id?sslmode=disable"
 ```
 
-Open http://localhost:3000 and click **Sign in with Keston ID**.
-
-## Test client
-
-| Field | Value |
-| --- | --- |
-| `client_id` | `keston-work` |
-| `client_secret` | `keston-work-secret` |
-| `redirect_uri` | `http://localhost:3001/callback` |
-| `grant_types` | `authorization_code`, `refresh_token` |
-| `scopes` | `openid`, `profile`, `email`, `offline_access` |
-
-## Demo user
-
-| Username | Password |
-| --- | --- |
-| `admin` | `password` |
-
-## Example authorization code flow (with PKCE)
-
-```sh
-# 1. Start the flow
-curl -i "http://localhost:4444/authorize?client_id=keston-work&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&response_type=code&scope=openid%20profile%20email&state=statevalue123&nonce=noncevalue123&code_challenge=<challenge>&code_challenge_method=S256"
-
-# Follow the redirects: log in with admin/password, then approve consent.
-# The final redirect to the client carries ?code=<authorization code>.
-
-# 2. Exchange the code for tokens
-curl -u "keston-work:keston-work-secret" \
-  -d "grant_type=authorization_code" \
-  --data-urlencode "code=<code>" \
-  --data-urlencode "redirect_uri=http://localhost:3000/callback" \
-  --data-urlencode "code_verifier=<verifier>" \
-  http://localhost:4444/token
-
-# 3. Call the UserInfo endpoint
-curl -H "Authorization: Bearer <access_token>" http://localhost:4444/userinfo
+```bash
+go run ./cmd/keston-id clients sync deploy/clients.dev.json
 ```
 
-## Configuration
+```bash
+go run ./cmd/keston-id users create -email you@keston.school -name "Your Name" -organisation "The Keston School"
+```
 
-Environment variables (with dev-friendly defaults):
+```bash
+go run ./cmd/keston-id
+```
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `KESTON_ID_ISSUER` | `http://localhost:4444` | Public issuer URL (discovery, ID/access token `iss`) |
-| `KESTON_ID_ADDR` | `:4444` | Listen address |
-| `KESTON_ID_SECRET` | dev value | 32-byte HMAC secret for code/refresh tokens |
-| `KESTON_ID_RSA_PRIVATE_KEY` | (generated) | PEM RSA key for signing JWTs; set to keep JWT access tokens valid across restarts |
-| `KESTON_ID_DATABASE_URL` | (empty → in-memory) | Postgres DSN; when set, clients/users/refresh tokens/codes are persisted |
-| `KESTON_ID_WORK_REDIRECT_URI` | `http://localhost:3001/callback` | Registered redirect URI for `keston-work` |
-| `KESTON_ID_DEMO_REDIRECT_URI` | `http://localhost:3000/callback` | Registered redirect URI for `keston-demo` |
+Then open
+`http://localhost:4444/authorize?client_id=demo&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&response_type=code&scope=openid%20profile%20email%20offline_access&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGkSz9IcjM&code_challenge_method=S256&state=test`,
+or `http://localhost:4444/account`.
 
-## Notes
+To work on the UI with hot reload, run `pnpm -C web dev` too, and start the
+server with `KESTON_ID_DEV_WEB_URL=http://localhost:5180`: the Go server then
+passes UI requests to Vite.
 
-- The UI consumes `@thekestongroup/ui` from GitHub Packages.
-- With `KESTON_ID_DATABASE_URL` set, storage is backed by Postgres (schema
-  auto-applied on startup). Access tokens are stateless JWTs (not persisted);
-  refresh tokens, authorize codes, OIDC/PKCE sessions, clients and users are.
-- Without a database URL it falls back to an in-memory store (dev only).
-- `web/dist` is committed so `go build` embeds the UI without requiring Node.
+With an `http://` issuer, Keston ID runs in development mode: cookies aren't
+`Secure` and a built-in secret key is used. Never use that in production.
+
+## Run it with Docker
+
+```bash
+cp .env.example .env
+```
+
+Fill in `.env` (at least `KESTON_ID_SECRET_KEY` and the client secrets), then:
+
+```bash
+docker compose up --build
+```
+
+`setup` runs once: it applies migrations and registers the apps in
+`deploy/clients.json` (set `KESTON_ID_CLIENTS_FILE=clients.dev.json` in `.env`
+for the local demo app instead). Then `keston-id` starts on
+http://localhost:4444. Create an account with:
+
+```bash
+docker compose run --rm -it keston-id users create -email you@keston.school -name "Your Name"
+```
+
+## On the VPS
+
+1. Set `KESTON_ID_ISSUER=https://id.keston.co` and a real
+   `KESTON_ID_SECRET_KEY` (`openssl rand -base64 32`) in `.env`. Keep the key
+   safe: it decrypts signing keys and two-step secrets.
+2. In `compose.yaml`, remove `ports:` from `keston-id`, and attach your load
+   balancer / reverse proxy to the `keston` network, sending `id.keston.co`
+   to `keston-id:4444` and terminating HTTPS. It should pass
+   `X-Forwarded-For`.
+3. Scale with `docker compose up -d --scale keston-id=3`. Point the load
+   balancer's health check at `/readyz`.
+4. Back up the `postgres` volume.
+
+For Kubernetes later: the same image, `keston-id clients sync …` as a Job (or
+init container), `serve` as a Deployment, `/healthz` and `/readyz` as
+liveness and readiness probes.
+
+## Registering an app
+
+Add it to `deploy/clients.json` and run `keston-id clients sync`. Confidential
+apps (with a server) name an environment variable holding their secret in
+`secretEnv`; leave it out for public apps (single-page or mobile), which must
+use PKCE. `verification` is `owned` (The Keston Group's own), `verified`
+(a checked partner) or `none` (shows a warning on the consent page).

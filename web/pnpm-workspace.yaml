@@ -1,4 +1,6 @@
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
-  - '@thekestongroup/ui'
+  - '@thekestongroup/ui@0.3.0'
+onlyBuiltDependencies:
+  - esbuild

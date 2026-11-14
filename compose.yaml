@@ -1,0 +1,63 @@
+# Keston ID with Postgres. Local:  docker compose up --build
+# On the VPS, put your load balancer / reverse proxy on the "keston" network
+# and send id.keston.co to keston-id:4444. More replicas:
+#   docker compose up -d --scale keston-id=3
+# Every replica is stateless (sessions, keys and tokens are in Postgres), so
+# the load balancer needs no sticky sessions.
+
+name: keston-id
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: keston
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-keston}
+      POSTGRES_DB: keston_id
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    networks: [keston]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keston -d keston_id"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-off: apply migrations and register the apps in deploy/clients.json,
+  # before any replica starts serving.
+  setup:
+    build: .
+    image: ghcr.io/thekestongroup/keston-id:latest
+    command: ["clients", "sync", "/etc/keston-id/${KESTON_ID_CLIENTS_FILE:-clients.json}"]
+    env_file: [{ path: .env, required: false }]
+    environment:
+      KESTON_ID_DATABASE_URL: postgres://keston:${POSTGRES_PASSWORD:-keston}@postgres:5432/keston_id?sslmode=disable
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [keston]
+    restart: "no"
+
+  keston-id:
+    image: ghcr.io/thekestongroup/keston-id:latest
+    restart: unless-stopped
+    env_file: [{ path: .env, required: false }]
+    environment:
+      KESTON_ID_DATABASE_URL: postgres://keston:${POSTGRES_PASSWORD:-keston}@postgres:5432/keston_id?sslmode=disable
+    depends_on:
+      setup: { condition: service_completed_successfully }
+    networks: [keston]
+    # Locally, reach it at http://localhost:4444. On the VPS, remove this
+    # and let the load balancer reach it over the network.
+    ports:
+      - "127.0.0.1:4444:4444"
+    deploy:
+      resources:
+        limits: { memory: 128M }
+
+networks:
+  keston:
+    name: keston
+
+volumes:
+  postgres:

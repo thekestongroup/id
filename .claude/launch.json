@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "keston-id",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/keston-id"],
+      "port": 4444
+    }
+  ]
+}

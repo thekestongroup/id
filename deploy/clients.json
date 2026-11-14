@@ -1,0 +1,35 @@
+[
+  {
+    "id": "learn",
+    "name": "Keston Learn",
+    "publisher": "The Keston Group",
+    "verification": "owned",
+    "secretEnv": "KESTON_LEARN_CLIENT_SECRET",
+    "redirectUris": ["https://learn.keston.co/callback"],
+    "postLogoutRedirectUris": ["https://learn.keston.co/"],
+    "requiredScopes": ["openid", "profile", "email"],
+    "optionalScopes": ["courses:read", "offline_access"]
+  },
+  {
+    "id": "schools",
+    "name": "Keston Schools",
+    "publisher": "The Keston Group",
+    "verification": "owned",
+    "secretEnv": "KESTON_SCHOOLS_CLIENT_SECRET",
+    "redirectUris": ["https://schools.keston.co/callback"],
+    "postLogoutRedirectUris": ["https://schools.keston.co/"],
+    "requiredScopes": ["openid", "profile", "email"],
+    "optionalScopes": ["students:read", "offline_access"]
+  },
+  {
+    "id": "work",
+    "name": "Keston Work",
+    "publisher": "The Keston Group",
+    "verification": "owned",
+    "secretEnv": "KESTON_WORK_CLIENT_SECRET",
+    "redirectUris": ["https://work.keston.co/callback"],
+    "postLogoutRedirectUris": ["https://work.keston.co/"],
+    "requiredScopes": ["openid", "profile", "email", "staff:read"],
+    "optionalScopes": ["offline_access"]
+  }
+]
