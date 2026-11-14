@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { AppWindow } from '@lucide/vue'
-import { Avatar, Button, Card, PageHeader, Spinner, formatDate, useNotifications } from '@thekestongroup/ui'
+import { Avatar, Button, Card, EmptyState, PageHeader, Spinner, formatDate, useNotifications } from '@thekestongroup/ui'
 import { onMounted, ref } from 'vue'
 import AppName from '../../components/AppName.vue'
 import { api, type ConnectedApp } from '../../lib/api'
@@ -71,12 +71,11 @@ async function remove(app: ConnectedApp) {
   </Card>
 
   <Card v-if="apps && !apps.length">
-    <div class="flex flex-col items-center gap-2 py-6 text-center">
-      <AppWindow class="size-8 text-black/45" aria-hidden="true" />
-      <h2 class="font-bold">No connected apps</h2>
-      <p class="max-w-sm text-sm text-black/65">
-        When you sign in to an app with your Keston account, it'll show here and you can remove its access.
-      </p>
-    </div>
+    <EmptyState
+      :icon="AppWindow"
+      :heading-level="2"
+      title="No connected apps"
+      description="When you sign in to an app with your Keston account, it'll show here and you can remove its access."
+    />
   </Card>
 </template>

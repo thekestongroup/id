@@ -1,6 +1,7 @@
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
-  - '@thekestongroup/ui@0.3.0'
+  # Our own package: no waiting period for new releases.
+  - '@thekestongroup/ui'
 onlyBuiltDependencies:
   - esbuild
