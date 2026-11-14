@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -24,6 +25,7 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/oidc"
 
 	"github.com/thekestongroup/id/internal/policy"
+	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 )
@@ -37,9 +39,13 @@ type VerifyToken func(ctx context.Context, token string) (*oidc.AccessTokenClaim
 type API struct {
 	store  *store.Store
 	verify VerifyToken
+	// Keston ID's address, for profile picture URLs.
+	issuer string
 }
 
-func New(s *store.Store, verify VerifyToken) *API { return &API{store: s, verify: verify} }
+func New(s *store.Store, verify VerifyToken, issuer string) *API {
+	return &API{store: s, verify: verify, issuer: issuer}
+}
 
 func (a *API) Routes() http.Handler {
 	r := chi.NewRouter()
@@ -52,16 +58,43 @@ func (a *API) Routes() http.Handler {
 
 	r.Get("/organisations", a.listOrganisations)
 	r.Post("/organisations", a.createOrganisation)
+	r.Get("/notifications", a.notifications)
+	r.Post("/notifications/read", a.readNotifications)
+	r.Delete("/notifications", a.clearNotifications)
+
 	r.Route("/organisations/{orgID}", func(r chi.Router) {
-		r.Use(a.requireOrganisation)
+		// Seeing it: platform admins (Keston staff), and its global admins.
+		r.Use(a.requireView)
 		r.Get("/", a.getOrganisation)
-		r.Get("/users", a.listUsers)
-		r.Post("/users", a.createUser)
-		r.Post("/users/{userID}/reset-password", a.resetPassword)
-		r.Post("/users/{userID}/status", a.setStatus)
-		r.Get("/password-policy", a.getPolicy)
-		r.Put("/password-policy", a.putPolicy)
+		r.Get("/support", a.getSupport)
+		r.Post("/support/requests", a.requestSupport)
+		r.Post("/support/requests/{requestID}/{decision:approve|deny}", a.decideSupport)
+		r.Post("/support/revoke", a.revokeSupport)
+		r.Post("/lockout", a.startLockout)
+		r.Post("/lockout/{lockoutID}/{decision:deny|cancel}", a.decideLockout)
+
+		// Its accounts and settings: its global admins, or Keston support
+		// while a global admin has approved support access.
+		r.Group(func(r chi.Router) {
+			r.Use(a.requireManage)
+			r.Get("/users", a.listUsers)
+			r.Post("/users", a.createUser)
+			r.Get("/users/{userID}", a.getUser)
+			r.Patch("/users/{userID}", a.updateUser)
+			r.Put("/users/{userID}/picture", a.setUserPicture)
+			r.Delete("/users/{userID}/picture", a.removeUserPicture)
+			r.Post("/users/{userID}/reset-password", a.resetPassword)
+			r.Post("/users/{userID}/status", a.setStatus)
+			r.Get("/apps", a.listApps)
+			r.Put("/apps/{clientID}", a.putApp)
+			r.Delete("/apps/{clientID}", a.deleteApp)
+			r.Get("/settings", a.getSettings)
+			r.Put("/settings", a.putSettings)
+			r.Get("/password-policy", a.getPolicy)
+			r.Put("/password-policy", a.putPolicy)
+		})
 	})
+
 	return r
 }
 
@@ -111,16 +144,31 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// canManage: platform admins manage every organisation; global admins
-// their own.
-func canManage(u *store.User, orgID string) bool {
-	return u.PlatformAdmin || (u.Role == "global_admin" && u.OrganisationID == orgID)
+// isOwnAdmin: a global admin of this organisation.
+func isOwnAdmin(u *store.User, orgID string) bool {
+	return u.Role == "global_admin" && u.OrganisationID == orgID
 }
 
-func (a *API) requireOrganisation(next http.Handler) http.Handler {
+// canManage: an organisation's global admins, and Keston support (platform
+// admins) only while support access is approved.
+func (a *API) canManage(ctx context.Context, u *store.User, orgID string) bool {
+	if isOwnAdmin(u, orgID) {
+		return true
+	}
+	if !u.PlatformAdmin {
+		return false
+	}
+	until, err := a.store.SupportAccess(ctx, orgID)
+	return err == nil && until != nil
+}
+
+// requireView: platform admins see every organisation's details (not its
+// accounts); global admins see their own.
+func (a *API) requireView(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "orgID")
-		if !canManage(caller(r), id) {
+		u := caller(r)
+		if !u.PlatformAdmin && !isOwnAdmin(u, id) {
 			writeError(w, http.StatusNotFound, "not_found", "That organisation doesn't exist.")
 			return
 		}
@@ -130,6 +178,17 @@ func (a *API) requireOrganisation(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), orgKey, org)))
+	})
+}
+
+func (a *API) requireManage(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !a.canManage(r.Context(), caller(r), organisation(r).ID) {
+			writeError(w, http.StatusForbidden, "support_access",
+				"You need support access, approved by one of "+organisation(r).Name+"'s global admins.")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -160,7 +219,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	u := caller(r)
 	org, _ := a.store.OrganisationByID(r.Context(), u.OrganisationID)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user":          userView(u),
+		"user":          a.userView(u),
 		"platformAdmin": u.PlatformAdmin,
 		"organisation":  org,
 	})
@@ -189,7 +248,7 @@ func (a *API) passwordCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	pol := policy.Policy{}
 	if body.OrganisationID != "" {
-		if !canManage(caller(r), body.OrganisationID) {
+		if !a.canManage(r.Context(), caller(r), body.OrganisationID) {
 			writeError(w, http.StatusNotFound, "not_found", "That organisation doesn't exist.")
 			return
 		}
@@ -301,11 +360,15 @@ func (a *API) createOrganisation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("organisation created", "organisation", org.ID, "domain", domain, "by", caller(r).ID)
-	writeJSON(w, http.StatusCreated, map[string]any{"organisation": org, "admin": userView(admin)})
+	writeJSON(w, http.StatusCreated, map[string]any{"organisation": org, "admin": a.userView(admin)})
 }
 
 func (a *API) getOrganisation(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, organisation(r))
+	org := organisation(r)
+	writeJSON(w, http.StatusOK, struct {
+		*store.Organisation
+		CanManage bool `json:"canManage"`
+	}{org, a.canManage(r.Context(), caller(r), org.ID)})
 }
 
 // ── Accounts ─────────────────────────────────────────────────────────────
@@ -322,11 +385,13 @@ type userJSON struct {
 	Locked        bool   `json:"locked"`
 	CreatedAt     string `json:"createdAt"`
 	PasswordSetAt string `json:"passwordChangedAt"`
+	Avatar        string `json:"avatar,omitempty"`
 }
 
-func userView(u *store.User) userJSON {
+func (a *API) userView(u *store.User) userJSON {
 	name, _, _ := strings.Cut(u.Email, "@")
 	return userJSON{ID: u.ID, Email: u.Email, Username: name, Name: u.Name, Role: u.Role,
+		Avatar:        profile.PictureURL(a.issuer, u.ID, u.PictureUpdatedAt),
 		PlatformAdmin: u.PlatformAdmin, Status: u.Status, TwoStep: u.TOTPEnabled,
 		Locked:    u.LockedUntil != nil && u.LockedUntil.After(nowFunc()),
 		CreatedAt: u.CreatedAt.Format(timeFormat), PasswordSetAt: u.PasswordChangedAt.Format(timeFormat)}
@@ -340,7 +405,7 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]userJSON, len(users))
 	for i := range users {
-		out[i] = userView(&users[i])
+		out[i] = a.userView(&users[i])
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -386,7 +451,7 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("account created", "user", created.ID, "organisation", org.ID, "by", caller(r).ID)
-	writeJSON(w, http.StatusCreated, userView(created))
+	writeJSON(w, http.StatusCreated, a.userView(created))
 }
 
 // target is an account in the organisation in the URL.
@@ -526,3 +591,230 @@ func isUniqueViolation(err error) bool {
 const timeFormat = "2006-01-02T15:04:05Z07:00"
 
 var nowFunc = time.Now
+
+// ── One account: details, profile, picture ───────────────────────────────
+
+func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
+	if u := a.target(w, r); u != nil {
+		writeJSON(w, http.StatusOK, a.userView(u))
+	}
+}
+
+// PATCH …/users/{id} {name?, username?, role?}: admins can always change
+// these, whatever the organisation lets people change themselves.
+func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
+	u := a.target(w, r)
+	if u == nil {
+		return
+	}
+	var body struct {
+		Name     *string `json:"name"`
+		Username *string `json:"username"`
+		Role     *string `json:"role"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	var name, email *string
+	if body.Name != nil {
+		if !profile.ValidName(*body.Name) {
+			writeFieldError(w, "name", "Enter their name")
+			return
+		}
+		n := strings.TrimSpace(*body.Name)
+		name = &n
+	}
+	if body.Username != nil {
+		un := profile.NormaliseUsername(*body.Username)
+		if !profile.ValidUsername(un) {
+			writeFieldError(w, "username", profile.UsernameHelp)
+			return
+		}
+		e := un + "@" + organisation(r).Domain
+		email = &e
+	}
+	if body.Role != nil {
+		if *body.Role != "member" && *body.Role != "global_admin" {
+			writeFieldError(w, "role", "Choose member or global admin")
+			return
+		}
+		if u.ID == caller(r).ID && *body.Role != "global_admin" && !caller(r).PlatformAdmin {
+			writeFieldError(w, "role", "You can't remove your own global admin role.")
+			return
+		}
+		if err := a.store.SetRole(r.Context(), u.ID, *body.Role); err != nil {
+			serverError(w, r, err)
+			return
+		}
+	}
+	updated, err := a.store.UpdateProfile(r.Context(), u.ID, name, email)
+	if isUniqueViolation(err) {
+		writeFieldError(w, "username", "Someone else already has that email.")
+		return
+	}
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	slog.Info("account updated", "user", u.ID, "by", caller(r).ID)
+	writeJSON(w, http.StatusOK, a.userView(updated))
+}
+
+func (a *API) setUserPicture(w http.ResponseWriter, r *http.Request) {
+	u := a.target(w, r)
+	if u == nil {
+		return
+	}
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, profile.MaxPictureBytes+1))
+	if err != nil && !errors.As(err, new(*http.MaxBytesError)) {
+		writeError(w, http.StatusBadRequest, "bad_request", "Couldn't read the picture.")
+		return
+	}
+	contentType, err := profile.CheckPicture(data)
+	if err != nil {
+		writeFieldError(w, "picture", err.Error())
+		return
+	}
+	if err := a.store.SetPicture(r.Context(), u.ID, data, contentType); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	updated, _ := a.store.UserByID(r.Context(), u.ID)
+	writeJSON(w, http.StatusOK, a.userView(updated))
+}
+
+func (a *API) removeUserPicture(w http.ResponseWriter, r *http.Request) {
+	u := a.target(w, r)
+	if u == nil {
+		return
+	}
+	if err := a.store.SetPicture(r.Context(), u.ID, nil, ""); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── Organisation settings ────────────────────────────────────────────────
+
+func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"profileEditing": organisation(r).ProfileEditing})
+}
+
+// PUT …/settings {profileEditing}: which profile fields people may change.
+func (a *API) putSettings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ProfileEditing store.ProfileEditing `json:"profileEditing"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if err := a.store.SetProfileEditing(r.Context(), organisation(r).ID, body.ProfileEditing); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	slog.Info("organisation settings changed", "organisation", organisation(r).ID, "by", caller(r).ID)
+	writeJSON(w, http.StatusOK, map[string]any{"profileEditing": body.ProfileEditing})
+}
+
+// ── Organisation apps ────────────────────────────────────────────────────
+
+type appJSON struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Publisher    string `json:"publisher"`
+	Verification string `json:"verification"`
+}
+
+func appView(c store.Client) appJSON {
+	return appJSON{ID: c.ID, Name: c.Name, Publisher: c.Publisher, Verification: c.Verification}
+}
+
+// GET …/apps: Keston's own apps, the organisation's, and the others it
+// could add.
+func (a *API) listApps(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	builtin, err := a.store.BuiltinClients(ctx)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	orgApps, err := a.store.OrganisationApps(ctx, organisation(r).ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	all, err := a.store.AllClients(ctx)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	type orgAppJSON struct {
+		App     appJSON `json:"app"`
+		Mode    string  `json:"mode"`
+		AddedAt string  `json:"addedAt"`
+	}
+	taken := map[string]bool{ClientID: true} // Keston Admin isn't for everyone
+	out := struct {
+		Builtin      []appJSON    `json:"builtin"`
+		Organisation []orgAppJSON `json:"organisation"`
+		Available    []appJSON    `json:"available"`
+	}{Builtin: []appJSON{}, Organisation: []orgAppJSON{}, Available: []appJSON{}}
+	for _, c := range builtin {
+		out.Builtin = append(out.Builtin, appView(c))
+		taken[c.ID] = true
+	}
+	for _, oa := range orgApps {
+		out.Organisation = append(out.Organisation, orgAppJSON{App: appView(oa.Client), Mode: oa.Mode,
+			AddedAt: oa.AddedAt.Format(timeFormat)})
+		taken[oa.Client.ID] = true
+	}
+	for _, c := range all {
+		if !taken[c.ID] {
+			out.Available = append(out.Available, appView(c))
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// PUT …/apps/{clientID} {mode: enabled|optional}
+func (a *API) putApp(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.Mode != "enabled" && body.Mode != "optional" {
+		writeFieldError(w, "mode", "Choose enabled for everyone, or optional")
+		return
+	}
+	c, err := a.store.ClientByID(r.Context(), chi.URLParam(r, "clientID"))
+	if err != nil || c.Builtin || c.ID == ClientID {
+		writeError(w, http.StatusNotFound, "not_found", "That app can't be added.")
+		return
+	}
+	if err := a.store.SetOrganisationApp(r.Context(), organisation(r).ID, c.ID, body.Mode); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	slog.Info("organisation app set", "organisation", organisation(r).ID, "app", c.ID, "mode", body.Mode,
+		"by", caller(r).ID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) deleteApp(w http.ResponseWriter, r *http.Request) {
+	if err := a.store.RemoveOrganisationApp(r.Context(), organisation(r).ID, chi.URLParam(r, "clientID")); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// decodeOptional reads a JSON body if there is one.
+func decodeOptional(r *http.Request, v any) error {
+	if r.ContentLength == 0 {
+		return nil
+	}
+	return json.NewDecoder(http.MaxBytesReader(nil, r.Body, 64<<10)).Decode(v)
+}

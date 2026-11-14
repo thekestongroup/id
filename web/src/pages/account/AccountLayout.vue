@@ -32,7 +32,7 @@ const nav = computed<SidebarSection[]>(() => [
     :user="me.user"
     :link-component="RouterLink"
     @account-settings="router.push('/account')"
-    @switch-account="signOut(router)"
+    @switch-account="router.push('/choose-account')"
     @log-out="signOut(router)"
   >
     <div class="flex max-w-3xl flex-col gap-6 p-4 sm:p-6">

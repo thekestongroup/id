@@ -42,7 +42,8 @@
       "offline_access"
     ],
     "privacyUrl": "https://learn.keston.co/privacy",
-    "termsUrl": "https://learn.keston.co/terms"
+    "termsUrl": "https://learn.keston.co/terms",
+    "builtin": true
   },
   {
     "id": "schools",
@@ -66,7 +67,8 @@
       "offline_access"
     ],
     "privacyUrl": "https://schools.keston.co/privacy",
-    "termsUrl": "https://schools.keston.co/terms"
+    "termsUrl": "https://schools.keston.co/terms",
+    "builtin": true
   },
   {
     "id": "work",
@@ -90,6 +92,7 @@
       "offline_access"
     ],
     "privacyUrl": "https://work.keston.co/privacy",
-    "termsUrl": "https://work.keston.co/terms"
+    "termsUrl": "https://work.keston.co/terms",
+    "builtin": true
   }
 ]

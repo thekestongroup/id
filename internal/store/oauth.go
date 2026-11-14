@@ -26,16 +26,18 @@ type Client struct {
 	PrivacyURL             string   `json:"privacyUrl"`
 	TermsURL               string   `json:"termsUrl"`
 	DevMode                bool     `json:"devMode"`
+	// One of Keston's own apps, which every organisation has.
+	Builtin bool `json:"builtin"`
 }
 
 const clientColumns = `id, name, publisher, verification, secret_hash, redirect_uris, post_logout_redirect_uris,
-	required_scopes, optional_scopes, skip_consent, backchannel_logout_uri, privacy_url, terms_url, dev_mode`
+	required_scopes, optional_scopes, skip_consent, backchannel_logout_uri, privacy_url, terms_url, dev_mode, builtin`
 
 func scanClient(row pgx.Row) (*Client, error) {
 	var c Client
 	if err := row.Scan(&c.ID, &c.Name, &c.Publisher, &c.Verification, &c.SecretHash, &c.RedirectURIs,
 		&c.PostLogoutRedirectURIs, &c.RequiredScopes, &c.OptionalScopes, &c.SkipConsent, &c.BackchannelLogoutURI,
-		&c.PrivacyURL, &c.TermsURL, &c.DevMode); err != nil {
+		&c.PrivacyURL, &c.TermsURL, &c.DevMode, &c.Builtin); err != nil {
 		return nil, notFound(err)
 	}
 	return &c, nil
@@ -50,15 +52,16 @@ func (s *Store) ClientByID(ctx context.Context, id string) (*Client, error) {
 func (s *Store) UpsertClient(ctx context.Context, c *Client, secretHash *string) error {
 	_, err := s.DB.Exec(ctx, `INSERT INTO clients (id, name, publisher, verification, secret_hash, redirect_uris,
 			post_logout_redirect_uris, required_scopes, optional_scopes, skip_consent, backchannel_logout_uri,
-			privacy_url, terms_url, dev_mode)
-		VALUES ($1, $2, $3, $4, nullif($5, ''), $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			privacy_url, terms_url, dev_mode, builtin)
+		VALUES ($1, $2, $3, $4, nullif($5, ''), $6, $7, $8, $9, $10, $11, $12, $13, $14, $16)
 		ON CONFLICT (id) DO UPDATE SET name = $2, publisher = $3, verification = $4,
 			secret_hash = CASE WHEN $15 THEN nullif($5, '') ELSE clients.secret_hash END,
 			redirect_uris = $6, post_logout_redirect_uris = $7, required_scopes = $8, optional_scopes = $9,
-			skip_consent = $10, backchannel_logout_uri = $11, privacy_url = $12, terms_url = $13, dev_mode = $14`,
+			skip_consent = $10, backchannel_logout_uri = $11, privacy_url = $12, terms_url = $13, dev_mode = $14,
+			builtin = $16`,
 		c.ID, c.Name, c.Publisher, c.Verification, deref(secretHash), c.RedirectURIs, c.PostLogoutRedirectURIs,
 		c.RequiredScopes, c.OptionalScopes, c.SkipConsent, c.BackchannelLogoutURI, c.PrivacyURL, c.TermsURL,
-		c.DevMode, secretHash != nil)
+		c.DevMode, secretHash != nil, c.Builtin)
 	return err
 }
 
@@ -91,17 +94,18 @@ type AuthRequest struct {
 	AMR                 []string
 	Done                bool
 	CreatedAt           time.Time
+	AccountChosen       bool
 }
 
 const authRequestColumns = `id, client_id, redirect_uri, scopes, state, nonce, response_type, response_mode,
 	code_challenge, code_challenge_method, prompt, max_age_seconds, login_hint, user_id, session_id, auth_time, amr,
-	done, created_at`
+	done, created_at, account_chosen`
 
 func scanAuthRequest(row pgx.Row) (*AuthRequest, error) {
 	var a AuthRequest
 	if err := row.Scan(&a.ID, &a.ClientID, &a.RedirectURI, &a.Scopes, &a.State, &a.Nonce, &a.ResponseType,
 		&a.ResponseMode, &a.CodeChallenge, &a.CodeChallengeMethod, &a.Prompt, &a.MaxAgeSeconds, &a.LoginHint,
-		&a.UserID, &a.SessionID, &a.AuthTime, &a.AMR, &a.Done, &a.CreatedAt); err != nil {
+		&a.UserID, &a.SessionID, &a.AuthTime, &a.AMR, &a.Done, &a.CreatedAt, &a.AccountChosen); err != nil {
 		return nil, notFound(err)
 	}
 	return &a, nil
@@ -141,6 +145,13 @@ func (s *Store) CompleteAuthRequest(ctx context.Context, id string, sess *Sessio
 	return err
 }
 
+// ChooseAccount records that someone picked which account an app's sign-in
+// uses, so the account chooser isn't shown again for it.
+func (s *Store) ChooseAccount(ctx context.Context, id string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE auth_requests SET account_chosen = TRUE WHERE id = $1`, id)
+	return err
+}
+
 func (s *Store) DeleteAuthRequest(ctx context.Context, id string) error {
 	_, err := s.DB.Exec(ctx, `DELETE FROM auth_requests WHERE id = $1`, id)
 	return err
@@ -165,6 +176,10 @@ func (s *Store) Grant(ctx context.Context, userID, clientID string) (*Grant, err
 }
 
 func (s *Store) SaveGrant(ctx context.Context, userID, clientID string, scopes []string) error {
+	if _, err := s.DB.Exec(ctx, `DELETE FROM removed_apps WHERE user_id = $1 AND client_id = $2`, userID,
+		clientID); err != nil {
+		return err
+	}
 	_, err := s.DB.Exec(ctx, `INSERT INTO grants (user_id, client_id, scopes) VALUES ($1, $2, $3)
 		ON CONFLICT (user_id, client_id) DO UPDATE SET scopes = $3, granted_at = now()`, userID, clientID, scopes)
 	return err
@@ -209,15 +224,18 @@ type RefreshToken struct {
 	AMR       []string
 	AuthTime  time.Time
 	ExpiresAt time.Time
+	// The Keston ID browser session it came from (nil: none, e.g. older tokens).
+	SessionID *string
 }
 
 func (s *Store) CreateAccessToken(ctx context.Context, q Querier, clientID string, userID *string, audience,
-	scopes []string, refreshTokenID *string, ttl time.Duration) (string, time.Time, error) {
+	scopes []string, refreshTokenID, sessionID *string, ttl time.Duration) (string, time.Time, error) {
 	var id string
 	var exp time.Time
-	err := q.QueryRow(ctx, `INSERT INTO access_tokens (client_id, user_id, audience, scopes, refresh_token_id, expires_at)
-		VALUES ($1, $2, $3, $4, $5, now() + $6::interval) RETURNING id, expires_at`,
-		clientID, userID, audience, scopes, refreshTokenID, ttl).Scan(&id, &exp)
+	err := q.QueryRow(ctx, `INSERT INTO access_tokens (client_id, user_id, audience, scopes, refresh_token_id, session_id,
+			expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval) RETURNING id, expires_at`,
+		clientID, userID, audience, scopes, refreshTokenID, sessionID, ttl).Scan(&id, &exp)
 	return id, exp, err
 }
 
@@ -240,18 +258,18 @@ func (s *Store) CreateRefreshToken(ctx context.Context, q Querier, r *RefreshTok
 	token := secret.Token()
 	var id string
 	err := q.QueryRow(ctx, `INSERT INTO refresh_tokens (token_hash, client_id, user_id, audience, scopes, amr,
-			auth_time, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, now() + $8::interval) RETURNING id`,
-		secret.Hash(token), r.ClientID, r.UserID, r.Audience, r.Scopes, r.AMR, r.AuthTime, ttl).Scan(&id)
+			auth_time, session_id, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + $9::interval) RETURNING id`,
+		secret.Hash(token), r.ClientID, r.UserID, r.Audience, r.Scopes, r.AMR, r.AuthTime, r.SessionID, ttl).Scan(&id)
 	return token, id, err
 }
 
-const refreshColumns = `id, client_id, user_id, audience, scopes, amr, auth_time, expires_at`
+const refreshColumns = `id, client_id, user_id, audience, scopes, amr, auth_time, expires_at, session_id`
 
 func scanRefresh(row pgx.Row) (*RefreshToken, error) {
 	var r RefreshToken
 	if err := row.Scan(&r.ID, &r.ClientID, &r.UserID, &r.Audience, &r.Scopes, &r.AMR, &r.AuthTime,
-		&r.ExpiresAt); err != nil {
+		&r.ExpiresAt, &r.SessionID); err != nil {
 		return nil, notFound(err)
 	}
 	return &r, nil
@@ -316,4 +334,41 @@ func (s *Store) RotateSigningKey(ctx context.Context, k *SigningKey) error {
 // Querier is a pool or a transaction.
 type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// SessionApp is an app signed in through a Keston ID session.
+type SessionApp struct {
+	ClientID             string
+	UserID               string
+	BackchannelLogoutURI string
+}
+
+// EndSessionApps revokes every app token that came from a Keston ID session,
+// returning the apps that had them (to tell them, by back-channel logout).
+func (s *Store) EndSessionApps(ctx context.Context, sessionID string) ([]SessionApp, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT DISTINCT t.client_id, t.user_id::text, c.backchannel_logout_uri
+		FROM (SELECT client_id, user_id FROM access_tokens WHERE session_id = $1
+		      UNION SELECT client_id, user_id FROM refresh_tokens WHERE session_id = $1) t
+		JOIN clients c ON c.id = t.client_id`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	apps, err := pgx.CollectRows(rows, pgx.RowToStructByPos[SessionApp])
+	if err != nil {
+		return nil, err
+	}
+	for _, q := range []string{
+		`DELETE FROM access_tokens WHERE session_id = $1`,
+		`DELETE FROM refresh_tokens WHERE session_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, q, sessionID); err != nil {
+			return nil, err
+		}
+	}
+	return apps, tx.Commit(ctx)
 }

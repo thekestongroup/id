@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/base64"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -13,14 +15,25 @@ import (
 	"rsc.io/qr"
 
 	"github.com/thekestongroup/id/internal/policy"
+	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/secret"
+	"github.com/thekestongroup/id/internal/store"
 )
 
 // GET /api/me
 func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
+	org, err := a.store.OrganisationByID(r.Context(), cur.user.OrganisationID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user": viewUser(cur.user),
+		"user":     a.viewUser(cur.user),
+		"username": username(cur.user.Email),
+		"domain":   org.Domain,
+		// What this person may change themselves (their organisation decides).
+		"editable": org.ProfileEditing,
 		"security": map[string]any{
 			"twoStep":           cur.user.TOTPEnabled,
 			"backupCodesLeft":   len(cur.user.BackupCodes),
@@ -30,37 +43,127 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/me/apps: apps with access, and what each can do.
+// GET /api/me/apps: every app on this account, and who put it there:
+//   - "builtin": Keston's own apps ("Enabled by your organisation")
+//   - "organisation": added by the organisation, "enabled" (can't remove)
+//     or "optional" (can remove)
+//   - "user": apps this person signed in to themselves (can remove)
 func (a *API) apps(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
-	grants, err := a.store.GrantsForUser(r.Context(), cur.user.ID)
+	ctx := r.Context()
+	builtin, err := a.store.BuiltinClients(ctx)
 	if err != nil {
 		serverError(w, r, err)
 		return
 	}
+	orgApps, err := a.store.OrganisationApps(ctx, cur.user.OrganisationID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	grants, err := a.store.GrantsForUser(ctx, cur.user.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	removed, err := a.store.RemovedApps(ctx, cur.user.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	granted := map[string]store.Grant{}
+	for _, g := range grants {
+		granted[g.ClientID] = g
+	}
+
 	type appView struct {
 		Client    clientView  `json:"client"`
+		Source    string      `json:"source"` // builtin, organisation, user
+		Removable bool        `json:"removable"`
 		Scopes    []ScopeInfo `json:"scopes"`
-		GrantedAt time.Time   `json:"grantedAt"`
+		// When this person allowed it (nil: never signed in to it yet).
+		GrantedAt *time.Time `json:"grantedAt,omitempty"`
 	}
 	out := []appView{}
+	seen := map[string]bool{}
+	add := func(c *store.Client, source string, removable bool) {
+		seen[c.ID] = true
+		v := appView{Client: viewClient(c, first(c.RedirectURIs)), Source: source, Removable: removable,
+			Scopes: []ScopeInfo{}}
+		if g, ok := granted[c.ID]; ok {
+			v.Scopes = describe(g.Scopes)
+			t := g.GrantedAt
+			v.GrantedAt = &t
+		}
+		out = append(out, v)
+	}
+	for i := range builtin {
+		add(&builtin[i], "builtin", false)
+	}
+	for i := range orgApps {
+		c := orgApps[i].Client
+		if seen[c.ID] || (orgApps[i].Mode == "optional" && removed[c.ID]) {
+			continue
+		}
+		add(&c, "organisation", orgApps[i].Mode == "optional")
+	}
 	for _, g := range grants {
-		c, err := a.store.ClientByID(r.Context(), g.ClientID)
+		if seen[g.ClientID] {
+			continue
+		}
+		c, err := a.store.ClientByID(ctx, g.ClientID)
 		if err != nil {
 			continue
 		}
-		redirect := ""
-		if len(c.RedirectURIs) > 0 {
-			redirect = c.RedirectURIs[0]
-		}
-		out = append(out, appView{Client: viewClient(c, redirect), Scopes: describe(g.Scopes), GrantedAt: g.GrantedAt})
+		add(c, "user", true)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// DELETE /api/me/apps/{clientID}: remove an app's access.
+func first(list []string) string {
+	if len(list) == 0 {
+		return ""
+	}
+	return list[0]
+}
+
+// DELETE /api/me/apps/{clientID}: remove an app's access. Keston's own apps
+// and apps the organisation requires can't be removed.
 func (a *API) revokeApp(w http.ResponseWriter, r *http.Request) {
-	if err := a.store.RevokeClient(r.Context(), from(r).user.ID, chi.URLParam(r, "clientID")); err != nil {
+	cur := from(r)
+	ctx := r.Context()
+	id := chi.URLParam(r, "clientID")
+	c, err := a.store.ClientByID(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "That app doesn't exist.")
+		return
+	}
+	if c.Builtin {
+		writeError(w, http.StatusForbidden, "required", "Your organisation has enabled this app for everyone.")
+		return
+	}
+	orgApps, err := a.store.OrganisationApps(ctx, cur.user.OrganisationID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	for _, oa := range orgApps {
+		if oa.Client.ID != id {
+			continue
+		}
+		if oa.Mode == "enabled" {
+			writeError(w, http.StatusForbidden, "required", "Your organisation has enabled this app for everyone.")
+			return
+		}
+		// Optional: hidden for this person, and its access revoked.
+		if err := a.store.RemoveAppForUser(ctx, cur.user.ID, id); err != nil {
+			serverError(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := a.store.RevokeClient(ctx, cur.user.ID, id); err != nil {
 		serverError(w, r, err)
 		return
 	}
@@ -92,7 +195,7 @@ func (a *API) sessions(w http.ResponseWriter, r *http.Request) {
 }
 
 // DELETE /api/me/sessions/{sessionID}: sign out another device.
-func (a *API) endSession(w http.ResponseWriter, r *http.Request) {
+func (a *API) signOutDevice(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	id := chi.URLParam(r, "sessionID")
 	list, err := a.store.SessionsForUser(r.Context(), cur.user.ID)
@@ -102,12 +205,11 @@ func (a *API) endSession(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, s := range list {
 		if s.ID == id {
-			if err := a.store.DeleteSession(r.Context(), id); err != nil {
-				serverError(w, r, err)
-				return
-			}
+			// Signs that device out of Keston ID and of the apps it signed in to.
 			if id == cur.session.ID {
-				a.clearSessionCookie(w)
+				a.EndBrowserSession(w, r)
+			} else {
+				a.end(r.Context(), id)
 			}
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -151,9 +253,16 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	if err := a.store.DeleteOtherSessions(ctx, cur.user.ID, cur.session.ID); err != nil {
+	// Every other device is signed out, of Keston ID and its apps.
+	others, err := a.store.SessionsForUser(ctx, cur.user.ID)
+	if err != nil {
 		serverError(w, r, err)
 		return
+	}
+	for _, s := range others {
+		if s.ID != cur.session.ID {
+			a.end(ctx, s.ID)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -270,4 +379,106 @@ func backupCodes(n int) ([]string, []string) {
 func username(email string) string {
 	name, _, _ := strings.Cut(email, "@")
 	return name
+}
+
+// PATCH /api/me {name?, username?}: only the fields the organisation allows.
+func (a *API) updateProfile(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name     *string `json:"name"`
+		Username *string `json:"username"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	cur := from(r)
+	ctx := r.Context()
+	org, err := a.store.OrganisationByID(ctx, cur.user.OrganisationID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	var name, email *string
+	if body.Name != nil {
+		if !org.ProfileEditing.Name {
+			writeFieldError(w, "name", "Your organisation has restricted changing your name.")
+			return
+		}
+		if !profile.ValidName(*body.Name) {
+			writeFieldError(w, "name", "Enter your name")
+			return
+		}
+		n := strings.TrimSpace(*body.Name)
+		name = &n
+	}
+	if body.Username != nil {
+		if !org.ProfileEditing.Email {
+			writeFieldError(w, "username", "Your organisation has restricted changing your email.")
+			return
+		}
+		u := profile.NormaliseUsername(*body.Username)
+		if !profile.ValidUsername(u) {
+			writeFieldError(w, "username", profile.UsernameHelp)
+			return
+		}
+		e := u + "@" + org.Domain
+		email = &e
+	}
+	user, err := a.store.UpdateProfile(ctx, cur.user.ID, name, email)
+	if isUniqueViolation(err) {
+		writeFieldError(w, "username", "Someone else already has that email.")
+		return
+	}
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.viewUser(user))
+}
+
+// PUT /api/me/picture (the image as the body): if the organisation allows.
+func (a *API) setPicture(w http.ResponseWriter, r *http.Request) {
+	cur := from(r)
+	org, err := a.store.OrganisationByID(r.Context(), cur.user.OrganisationID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if !org.ProfileEditing.Picture {
+		writeError(w, http.StatusForbidden, "restricted", "Your organisation has restricted changing your picture.")
+		return
+	}
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, profile.MaxPictureBytes+1))
+	if err != nil && !errors.As(err, new(*http.MaxBytesError)) {
+		writeError(w, http.StatusBadRequest, "bad_request", "Couldn't read the picture.")
+		return
+	}
+	contentType, err := profile.CheckPicture(data)
+	if err != nil {
+		writeFieldError(w, "picture", err.Error())
+		return
+	}
+	if err := a.store.SetPicture(r.Context(), cur.user.ID, data, contentType); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	user, _ := a.store.UserByID(r.Context(), cur.user.ID)
+	writeJSON(w, http.StatusOK, a.viewUser(user))
+}
+
+func (a *API) removePicture(w http.ResponseWriter, r *http.Request) {
+	cur := from(r)
+	org, err := a.store.OrganisationByID(r.Context(), cur.user.OrganisationID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if !org.ProfileEditing.Picture {
+		writeError(w, http.StatusForbidden, "restricted", "Your organisation has restricted changing your picture.")
+		return
+	}
+	if err := a.store.SetPicture(r.Context(), cur.user.ID, nil, ""); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

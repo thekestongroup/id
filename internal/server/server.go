@@ -38,16 +38,19 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 		CodeMethodS256:           true,
 		AuthMethodPost:           true,
 		GrantTypeRefreshToken:    true,
-		SupportedUILocales:       []language.Tag{language.BritishEnglish},
-		SupportedScopes:          []string{"openid", "profile", "email", "offline_access"},
+		// Signing out of Keston ID signs out of apps: see oidcstore.EndSession.
+		BackChannelLogoutSupported:        true,
+		BackChannelLogoutSessionSupported: true,
+		SupportedUILocales:                []language.Tag{language.BritishEnglish},
+		SupportedScopes:                   []string{"openid", "profile", "email", "offline_access"},
 		SupportedClaims: []string{"sub", "aud", "exp", "iat", "iss", "auth_time", "nonce", "acr", "amr", "c_hash",
-			"at_hash", "name", "preferred_username", "email", "email_verified", "organisation", "updated_at"},
+			"at_hash", "name", "preferred_username", "email", "email_verified", "organisation", "updated_at", "picture"},
 	}, storage, op.StaticIssuer(cfg.Issuer), opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	a := api.New(st, cfg)
+	a := api.New(st, cfg, storage.EndSession)
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.Recoverer, requestLog, securityHeaders)
 
@@ -63,13 +66,33 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 
 	r.Mount("/api", a.Routes())
 
+	// Profile pictures, for Keston ID, Keston Admin and apps (the userinfo
+	// "picture" claim). The ?v= in their URLs changes with the picture, so
+	// they can be cached for a long time.
+	r.Get("/pictures/{userID}", func(w http.ResponseWriter, r *http.Request) {
+		data, contentType, err := st.Picture(r.Context(), chi.URLParam(r, "userID"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+		w.Write(data)
+	})
+
 	// Keston Admin's API. Caddy serves it at admin.keston.co/api/…, so the
 	// admin app calls it on its own origin (no CORS).
 	verify := func(ctx context.Context, token string) (*oidc.AccessTokenClaims, error) {
 		v := provider.AccessTokenVerifier(op.ContextWithIssuer(ctx, cfg.Issuer))
 		return op.VerifyAccessToken[*oidc.AccessTokenClaims](ctx, token, v)
 	}
-	r.Mount("/admin/v1", adminapi.New(st, verify).Routes())
+	admin := adminapi.New(st, verify, cfg.Issuer)
+	// Self-service sign-up: no sign-in (rate limited). Mounted first, so it
+	// isn't behind the admin API's token check.
+	r.Mount("/admin/v1/public", admin.PublicRoutes())
+	r.Mount("/admin/v1", admin.Routes())
 
 	// Cancel on the consent prompt, or prompt=none that needs interaction:
 	// send the OAuth error back to the app.

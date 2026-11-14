@@ -20,7 +20,9 @@ export function useFlow(page: Flow['step']) {
     try {
       const f = await api.flow(authRequestID.value)
       flow.value = f
-      if (f.step !== page) {
+      // ?add=1: signing in to another account while already signed in.
+      const adding = page === 'sign-in' && route.query.add !== undefined
+      if (f.step !== page && !adding) {
         await follow(router, f, authRequestID.value)
       }
     } catch (e) {

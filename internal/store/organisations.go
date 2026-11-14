@@ -11,24 +11,28 @@ import (
 )
 
 type Organisation struct {
-	ID             string        `json:"id"`
-	Name           string        `json:"name"`
-	Domain         string        `json:"domain"`
-	PasswordPolicy policy.Policy `json:"passwordPolicy"`
-	UserCount      int           `json:"userCount"`
-	CreatedAt      time.Time     `json:"createdAt"`
+	ID             string         `json:"id"`
+	Name           string         `json:"name"`
+	Domain         string         `json:"domain"`
+	PasswordPolicy policy.Policy  `json:"passwordPolicy"`
+	ProfileEditing ProfileEditing `json:"profileEditing"`
+	UserCount      int            `json:"userCount"`
+	CreatedAt      time.Time      `json:"createdAt"`
 }
 
-const orgColumns = `id, name, domain, password_policy,
+const orgColumns = `id, name, domain, password_policy, profile_editing,
 	(SELECT count(*) FROM users u WHERE u.organisation_id = organisations.id), created_at`
 
 func scanOrganisation(row pgx.Row) (*Organisation, error) {
 	var o Organisation
-	var raw []byte
-	if err := row.Scan(&o.ID, &o.Name, &o.Domain, &raw, &o.UserCount, &o.CreatedAt); err != nil {
+	var raw, editing []byte
+	if err := row.Scan(&o.ID, &o.Name, &o.Domain, &raw, &editing, &o.UserCount, &o.CreatedAt); err != nil {
 		return nil, notFound(err)
 	}
 	if err := json.Unmarshal(raw, &o.PasswordPolicy); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(editing, &o.ProfileEditing); err != nil {
 		return nil, err
 	}
 	o.PasswordPolicy = o.PasswordPolicy.Normalise()
@@ -112,4 +116,21 @@ func (s *Store) PolicyFor(ctx context.Context, orgID string) policy.Policy {
 		return o.PasswordPolicy
 	}
 	return policy.Policy{}.Normalise()
+}
+
+// ProfileEditing is which profile fields an organisation's people may
+// change themselves in Keston ID.
+type ProfileEditing struct {
+	Name    bool `json:"name"`
+	Email   bool `json:"email"`
+	Picture bool `json:"picture"`
+}
+
+func (s *Store) SetProfileEditing(ctx context.Context, orgID string, p ProfileEditing) error {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(ctx, `UPDATE organisations SET profile_editing = $2, updated_at = now() WHERE id = $1`, orgID, raw)
+	return err
 }

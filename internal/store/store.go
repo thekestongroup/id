@@ -31,13 +31,15 @@ func notFound(err error) error {
 // ── Users ────────────────────────────────────────────────────────────────
 
 type User struct {
-	ID                string
-	Email             string
-	Name              string
-	OrganisationID    string
-	Organisation      string // the organisation's name
-	Role              string // "member" or "global_admin"
-	PlatformAdmin     bool
+	ID             string
+	Email          string
+	Name           string
+	OrganisationID string
+	Organisation   string // the organisation's name
+	Role           string // "member" or "global_admin"
+	PlatformAdmin  bool
+	// When the profile picture last changed; nil: no picture.
+	PictureUpdatedAt  *time.Time
 	PasswordHash      string
 	PasswordChangedAt time.Time
 	TOTPSecret        []byte // encrypted
@@ -53,13 +55,14 @@ type User struct {
 // after SELECT … FROM users and after INSERT/UPDATE … RETURNING.
 const userColumns = `id, email, name, organisation_id,
 	(SELECT o.name FROM organisations o WHERE o.id = users.organisation_id) AS organisation_name, role, platform_admin,
+	picture_updated_at,
 	password_hash, password_changed_at, totp_secret, totp_enabled, backup_codes, status, failed_logins, locked_until,
 	created_at`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.OrganisationID, &u.Organisation, &u.Role, &u.PlatformAdmin,
-		&u.PasswordHash, &u.PasswordChangedAt, &u.TOTPSecret, &u.TOTPEnabled, &u.BackupCodes, &u.Status, &u.FailedLogins,
+		&u.PictureUpdatedAt, &u.PasswordHash, &u.PasswordChangedAt, &u.TOTPSecret, &u.TOTPEnabled, &u.BackupCodes, &u.Status, &u.FailedLogins,
 		&u.LockedUntil, &u.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
@@ -146,8 +149,15 @@ func (s *Store) ResetPassword(ctx context.Context, userID, hash string) error {
 		locked_until = NULL, updated_at = now() WHERE id = $1`, userID, hash); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
-		return err
+	// Signed out everywhere: Keston ID and every app.
+	for _, q := range []string{
+		`DELETE FROM sessions WHERE user_id = $1`,
+		`DELETE FROM access_tokens WHERE user_id = $1`,
+		`DELETE FROM refresh_tokens WHERE user_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, q, userID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -293,4 +303,38 @@ func (s *Store) Cleanup(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// UpdateProfile changes someone's name and/or email (nil: unchanged).
+func (s *Store) UpdateProfile(ctx context.Context, userID string, name, email *string) (*User, error) {
+	return scanUser(s.DB.QueryRow(ctx, `UPDATE users SET name = coalesce($2, name), email = coalesce($3, email),
+		updated_at = now() WHERE id = $1 RETURNING `+userColumns, userID, name, email))
+}
+
+// SetPicture sets (or with nil data, removes) a profile picture.
+func (s *Store) SetPicture(ctx context.Context, userID string, data []byte, contentType string) error {
+	if data == nil {
+		_, err := s.DB.Exec(ctx, `UPDATE users SET picture = NULL, picture_type = NULL, picture_updated_at = NULL
+			WHERE id = $1`, userID)
+		return err
+	}
+	_, err := s.DB.Exec(ctx, `UPDATE users SET picture = $2, picture_type = $3, picture_updated_at = now()
+		WHERE id = $1`, userID, data, contentType)
+	return err
+}
+
+func (s *Store) Picture(ctx context.Context, userID string) ([]byte, string, error) {
+	var data []byte
+	var contentType *string
+	err := s.DB.QueryRow(ctx, `SELECT picture, picture_type FROM users WHERE id = $1 AND picture IS NOT NULL`,
+		userID).Scan(&data, &contentType)
+	if err != nil {
+		return nil, "", notFound(err)
+	}
+	return data, deref(contentType), nil
+}
+
+func (s *Store) SetRole(ctx context.Context, userID, role string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE users SET role = $2, updated_at = now() WHERE id = $1`, userID, role)
+	return err
 }

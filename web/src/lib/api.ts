@@ -30,26 +30,42 @@ export interface UserView {
   name: string
   email: string
   organisation: string
+  /** Profile picture URL, if they have one. */
+  avatar?: string
 }
 
 /** What the sign-in flow shows next. */
 export interface Flow {
-  step: 'sign-in' | 'two-step' | 'consent' | 'redirect' | 'account'
+  step: 'sign-in' | 'choose' | 'two-step' | 'consent' | 'redirect' | 'account'
   redirect?: string
   client?: ClientView
   scopes?: { required: ScopeInfo[]; optional: ScopeInfo[] }
   user?: UserView
 }
 
+/** Which profile fields this person may change (their organisation decides). */
+export interface Editable {
+  name: boolean
+  email: boolean
+  picture: boolean
+}
+
 export interface Me {
   user: UserView
+  username: string
+  domain: string
+  editable: Editable
   security: { twoStep: boolean; backupCodesLeft: number; passwordChangedAt: string }
 }
 
 export interface ConnectedApp {
   client: ClientView
+  /** builtin: Keston's own; organisation: added by your organisation; user: added by you. */
+  source: 'builtin' | 'organisation' | 'user'
+  removable: boolean
   scopes: ScopeInfo[]
-  grantedAt: string
+  /** When you allowed it; missing if you haven't signed in to it yet. */
+  grantedAt?: string
 }
 
 export interface SessionInfo {
@@ -59,6 +75,16 @@ export interface SessionInfo {
   createdAt: string
   lastSeenAt: string
   current: boolean
+}
+
+/** An account signed in to this browser. */
+export interface SignedInAccount {
+  id: string
+  name: string
+  email: string
+  organisation: string
+  active: boolean
+  needsTwoStep: boolean
 }
 
 export class ApiError extends Error {
@@ -104,9 +130,29 @@ export const api = {
     request<Flow>('POST', '/two-step', { code, kind, authRequestID }),
   consent: (authRequestID: string, scopes: string[]) =>
     request<Flow>('POST', '/consent', { authRequestID, scopes }),
-  signOut: () => request<void>('POST', '/sign-out', {}),
+  /** Signs the active account (or every account) out of Keston ID and its apps. */
+  signOut: (all = false) => request<{ remaining: number }>('POST', '/sign-out', { all }),
+  accounts: () => request<SignedInAccount[]>('GET', '/accounts'),
+  switchAccount: (id: string, authRequestID?: string) =>
+    request<Flow>('POST', '/accounts/switch', { id, authRequestID }),
 
   me: () => request<Me>('GET', '/me'),
+  updateProfile: (changes: { name?: string; username?: string }) => request<UserView>('PATCH', '/me', changes),
+  removePicture: () => request<void>('DELETE', '/me/picture', {}),
+  /** Uploads a profile picture (PNG, JPEG or GIF, under 2 MB). */
+  setPicture: async (file: File): Promise<UserView> => {
+    const res = await fetch('/api/me/picture', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Keston-ID': '1' },
+      body: file,
+    }).catch(() => {
+      throw new ApiError(0, 'network', "Couldn't reach Keston ID. Check your connection and try again.")
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new ApiError(res.status, data.error ?? 'error', data.message ?? 'Something went wrong.', data.field)
+    return data as UserView
+  },
   apps: () => request<ConnectedApp[]>('GET', '/me/apps'),
   revokeApp: (clientId: string) => request<void>('DELETE', `/me/apps/${encodeURIComponent(clientId)}`, {}),
   sessions: () => request<SessionInfo[]>('GET', '/me/sessions'),

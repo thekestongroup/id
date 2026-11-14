@@ -15,7 +15,7 @@ import (
 
 // flowResponse tells the web UI which page comes next.
 //
-//	step: "sign-in" | "two-step" | "consent" | "redirect" | "account"
+//	step: "sign-in" | "choose" | "two-step" | "consent" | "redirect" | "account"
 type flowResponse struct {
 	Step     string      `json:"step"`
 	Redirect string      `json:"redirect,omitempty"`
@@ -34,7 +34,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 	ctx := r.Context()
 	res := &flowResponse{}
 	if cur != nil {
-		u := viewUser(cur.user)
+		u := a.viewUser(cur.user)
 		res.User = &u
 	}
 
@@ -79,6 +79,12 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 			return res, 0, ""
 		}
 		res.Step = "sign-in"
+		return res, 0, ""
+	}
+	// Several accounts signed in (or the app asks): which one?
+	if !ar.AccountChosen && !promptNone &&
+		(slices.Contains(ar.Prompt, "select_account") || len(a.signedIn(r)) > 1) {
+		res.Step = "choose"
 		return res, 0, ""
 	}
 	if cur.session.Stage == "password" {
@@ -196,10 +202,6 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = a.store.RecordLogin(ctx, user.ID, true)
 
-	// Signing in again (or as someone else) replaces this browser's session.
-	if old := a.current(r); old != nil {
-		_ = a.store.DeleteSession(ctx, old.session.ID)
-	}
 	stage := "verified"
 	if user.TOTPEnabled {
 		stage = "password"
@@ -210,7 +212,11 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	a.setSessionCookie(w, token)
+	// Added to this browser's signed-in accounts, as the active one.
+	a.addSession(w, r, token, user.ID)
+	if body.AuthRequestID != "" {
+		_ = a.store.ChooseAccount(ctx, body.AuthRequestID)
+	}
 	a.respondNext(w, r, &current{session: sess, user: user, token: token}, body.AuthRequestID)
 }
 
@@ -317,12 +323,6 @@ func (a *API) consent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, flowResponse{Step: "redirect", Redirect: a.callbackURL(ar.ID)})
-}
-
-// POST /api/sign-out
-func (a *API) signOut(w http.ResponseWriter, r *http.Request) {
-	a.EndBrowserSession(w, r)
-	w.WriteHeader(http.StatusNoContent)
 }
 
 var _ = store.ErrNotFound

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/jackc/pgx/v5/pgconn"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,17 +19,21 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/thekestongroup/id/internal/config"
+	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/store"
 )
-
-const sessionCookie = "kid_session"
 
 type API struct {
 	store *store.Store
 	cfg   *config.Config
+	// endSession signs a Keston ID session out of its apps (revokes their
+	// tokens, back-channel logout): oidcstore.Storage.EndSession.
+	endSession func(ctx context.Context, sessionID string) error
 }
 
-func New(s *store.Store, cfg *config.Config) *API { return &API{store: s, cfg: cfg} }
+func New(s *store.Store, cfg *config.Config, endSession func(context.Context, string) error) *API {
+	return &API{store: s, cfg: cfg, endSession: endSession}
+}
 
 func (a *API) Routes() http.Handler {
 	r := chi.NewRouter()
@@ -39,6 +44,8 @@ func (a *API) Routes() http.Handler {
 	r.Post("/two-step", a.twoStep)
 	r.Post("/consent", a.consent)
 	r.Post("/sign-out", a.signOut)
+	r.Get("/accounts", a.accounts)
+	r.Post("/accounts/switch", a.switchAccount)
 
 	r.Group(func(r chi.Router) {
 		r.Use(a.requireVerified)
@@ -46,7 +53,10 @@ func (a *API) Routes() http.Handler {
 		r.Get("/me/apps", a.apps)
 		r.Delete("/me/apps/{clientID}", a.revokeApp)
 		r.Get("/me/sessions", a.sessions)
-		r.Delete("/me/sessions/{sessionID}", a.endSession)
+		r.Delete("/me/sessions/{sessionID}", a.signOutDevice)
+		r.Patch("/me", a.updateProfile)
+		r.Put("/me/picture", a.setPicture)
+		r.Delete("/me/picture", a.removePicture)
 		r.Post("/me/password", a.changePassword)
 		r.Post("/me/two-step/setup", a.twoStepSetup)
 		r.Post("/me/two-step/enable", a.twoStepEnable)
@@ -96,44 +106,6 @@ func (a *API) requireVerified(next http.Handler) http.Handler {
 }
 
 func from(r *http.Request) *current { return r.Context().Value(ctxKey{}).(*current) }
-
-// current is the browser's session and account, if any.
-func (a *API) current(r *http.Request) *current {
-	c, err := r.Cookie(sessionCookie)
-	if err != nil || c.Value == "" {
-		return nil
-	}
-	sess, err := a.store.SessionByToken(r.Context(), c.Value)
-	if err != nil {
-		return nil
-	}
-	user, err := a.store.UserByID(r.Context(), sess.UserID)
-	if err != nil || user.Status != "active" {
-		return nil
-	}
-	return &current{session: sess, user: user, token: c.Value}
-}
-
-func (a *API) setSessionCookie(w http.ResponseWriter, token string) {
-	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: token, Path: "/", HttpOnly: true, Secure: a.cfg.SecureCookies(),
-		SameSite: http.SameSiteLaxMode, MaxAge: int(a.cfg.SessionTTL.Seconds()),
-	})
-}
-
-func (a *API) clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true,
-		Secure: a.cfg.SecureCookies(), SameSite: http.SameSiteLaxMode, MaxAge: -1})
-}
-
-// EndBrowserSession signs the browser out of Keston ID, for the OIDC
-// end_session endpoint.
-func (a *API) EndBrowserSession(w http.ResponseWriter, r *http.Request) {
-	if cur := a.current(r); cur != nil {
-		_ = a.store.DeleteSession(r.Context(), cur.session.ID)
-	}
-	a.clearSessionCookie(w)
-}
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -207,10 +179,14 @@ type userView struct {
 	Name         string `json:"name"`
 	Email        string `json:"email"`
 	Organisation string `json:"organisation"`
+	// Profile picture URL ("" for initials). Called avatar, as Keston UI's
+	// Avatar expects.
+	Avatar string `json:"avatar,omitempty"`
 }
 
-func viewUser(u *store.User) userView {
-	return userView{ID: u.ID, Name: u.Name, Email: u.Email, Organisation: u.Organisation}
+func (a *API) viewUser(u *store.User) userView {
+	return userView{ID: u.ID, Name: u.Name, Email: u.Email, Organisation: u.Organisation,
+		Avatar: profile.PictureURL(a.cfg.Issuer, u.ID, u.PictureUpdatedAt)}
 }
 
 func intersect(a, b []string) []string {
@@ -224,3 +200,17 @@ func intersect(a, b []string) []string {
 }
 
 func since(t time.Time) time.Duration { return time.Since(t) }
+
+// decodeOptional reads a JSON body if there is one.
+func decodeOptional(r *http.Request, v any) error {
+	if r.ContentLength == 0 {
+		return nil
+	}
+	r.Body = http.MaxBytesReader(nil, r.Body, 64<<10)
+	return json.NewDecoder(r.Body).Decode(v)
+}
+
+func isUniqueViolation(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23505"
+}

@@ -20,6 +20,11 @@ export const router = createRouter({
   routes: [
     { path: '/', redirect: '/account' },
     { path: '/sign-in', component: () => import('./pages/SignIn.vue'), meta: { title: 'Sign in' } },
+    {
+      path: '/choose-account',
+      component: () => import('./pages/ChooseAccount.vue'),
+      meta: { title: 'Choose an account' },
+    },
     { path: '/two-step', component: () => import('./pages/TwoStep.vue'), meta: { title: "Check it's you" } },
     { path: '/consent', component: () => import('./pages/Consent.vue'), meta: { title: 'Allow access' } },
     {

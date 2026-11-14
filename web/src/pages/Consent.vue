@@ -47,9 +47,8 @@ function cancel() {
   window.location.assign(`/authorize/deny?id=${encodeURIComponent(authRequestID.value!)}`)
 }
 
-async function switchAccount() {
-  await api.signOut().catch(() => {})
-  router.push({ path: '/sign-in', query: { authRequestID: authRequestID.value } })
+function switchAccount() {
+  router.push({ path: '/choose-account', query: { authRequestID: authRequestID.value } })
 }
 </script>
 

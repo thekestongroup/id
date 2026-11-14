@@ -29,6 +29,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/thekestongroup/id/internal/adminapi"
 	"github.com/thekestongroup/id/internal/config"
 	"github.com/thekestongroup/id/internal/db"
 	"github.com/thekestongroup/id/internal/oidcstore"
@@ -142,6 +143,8 @@ func serve(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, st *stor
 				if err := st.Cleanup(ctx); err != nil {
 					slog.Warn("cleanup", "error", err)
 				}
+				// Organisation lockout requests nobody denied go through.
+				adminapi.New(st, nil, cfg.Issuer).Housekeeping(ctx)
 				if err := ensureKey(); err != nil {
 					slog.Warn("signing key rotation", "error", err)
 				}

@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { AppWindow } from '@lucide/vue'
-import { Avatar, Button, Card, EmptyState, PageHeader, Spinner, formatDate, useNotifications } from '@thekestongroup/ui'
+import { Avatar, Badge, Button, Card, EmptyState, PageHeader, Spinner, formatDate, useNotifications } from '@thekestongroup/ui'
 import { onMounted, ref } from 'vue'
 import AppName from '../../components/AppName.vue'
 import { api, type ConnectedApp } from '../../lib/api'
 import { scopeIcon } from '../../lib/scopes'
 
-/** Apps that can use this account, what each can do, and Remove access. */
+/**
+ * Apps on this account: Keston's own and your organisation's (marked as
+ * such; optional ones can be removed), then apps you've added yourself.
+ */
 const { notify } = useNotifications()
 const apps = ref<ConnectedApp[]>()
 const removing = ref<string>()
@@ -44,7 +47,14 @@ async function remove(app: ConnectedApp) {
         <Avatar :user="{ name: app.client.name }" size="md" decorative />
         <div class="flex min-w-0 flex-1 flex-col">
           <AppName :client="app.client" as="h2" heading-class="text-base font-bold" :center="false" />
-          <span class="text-sm text-black/65">By {{ app.client.publisher }} · connected {{ formatDate(app.grantedAt) }}</span>
+          <span class="text-sm text-black/65">
+            By {{ app.client.publisher }}<template v-if="app.grantedAt"> · connected {{ formatDate(app.grantedAt) }}</template>
+          </span>
+          <div v-if="app.source !== 'user'" class="mt-1">
+            <Badge size="sm" color="blue">
+              {{ app.source === 'builtin' || !app.removable ? 'Enabled by your organisation' : 'Added by your organisation' }}
+            </Badge>
+          </div>
         </div>
       </div>
       <div v-if="app.scopes.length" class="flex flex-col gap-2">
@@ -56,7 +66,8 @@ async function remove(app: ConnectedApp) {
           </li>
         </ul>
       </div>
-      <div>
+      <p v-if="!app.scopes.length" class="text-sm text-black/65">You haven't signed in to it yet.</p>
+      <div v-if="app.removable">
         <Button
           variant="danger"
           size="sm"

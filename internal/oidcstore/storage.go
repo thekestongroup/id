@@ -19,6 +19,7 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 
 	"github.com/thekestongroup/id/internal/config"
+	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 )
@@ -99,21 +100,21 @@ func (s *Storage) DeleteAuthRequest(ctx context.Context, id string) error {
 
 // requestInfo pulls what every token needs out of the request types the
 // library passes in (code flow or refresh).
-func requestInfo(req op.TokenRequest) (clientID string, amr []string, authTime time.Time) {
+func requestInfo(req op.TokenRequest) (clientID string, amr []string, authTime time.Time, sessionID *string) {
 	switch r := req.(type) {
 	case authRequest:
-		return r.ClientID, r.AMR, r.GetAuthTime()
+		return r.ClientID, r.AMR, r.GetAuthTime(), r.SessionID
 	case *refreshRequest:
-		return r.ClientID, r.AMR, r.AuthTime
+		return r.ClientID, r.AMR, r.AuthTime, r.SessionID
 	}
-	return "", nil, time.Time{}
+	return "", nil, time.Time{}, nil
 }
 
 func (s *Storage) CreateAccessToken(ctx context.Context, req op.TokenRequest) (string, time.Time, error) {
-	clientID, _, _ := requestInfo(req)
+	clientID, _, _, sessionID := requestInfo(req)
 	user := req.GetSubject()
 	return s.store.CreateAccessToken(ctx, s.store.DB, clientID, &user, req.GetAudience(), req.GetScopes(), nil,
-		s.cfg.AccessTokenTTL)
+		sessionID, s.cfg.AccessTokenTTL)
 }
 
 // CreateAccessAndRefreshTokens issues a new pair. With currentRefreshToken
@@ -121,7 +122,7 @@ func (s *Storage) CreateAccessToken(ctx context.Context, req op.TokenRequest) (s
 // rotation, so a stolen refresh token stops working once either party uses it.
 func (s *Storage) CreateAccessAndRefreshTokens(ctx context.Context, req op.TokenRequest,
 	currentRefreshToken string) (string, string, time.Time, error) {
-	clientID, amr, authTime := requestInfo(req)
+	clientID, amr, authTime, sessionID := requestInfo(req)
 	tx, err := s.store.DB.Begin(ctx)
 	if err != nil {
 		return "", "", time.Time{}, err
@@ -134,19 +135,20 @@ func (s *Storage) CreateAccessAndRefreshTokens(ctx context.Context, req op.Token
 		}
 	}
 	refresh, refreshID, err := s.store.CreateRefreshToken(ctx, tx, &store.RefreshToken{
-		ClientID: clientID,
-		UserID:   req.GetSubject(),
-		Audience: req.GetAudience(),
-		Scopes:   req.GetScopes(),
-		AMR:      amr,
-		AuthTime: authTime,
+		ClientID:  clientID,
+		UserID:    req.GetSubject(),
+		Audience:  req.GetAudience(),
+		Scopes:    req.GetScopes(),
+		AMR:       amr,
+		AuthTime:  authTime,
+		SessionID: sessionID,
 	}, s.cfg.RefreshTokenTTL)
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
 	user := req.GetSubject()
 	accessID, exp, err := s.store.CreateAccessToken(ctx, tx, clientID, &user, req.GetAudience(), req.GetScopes(),
-		&refreshID, s.cfg.AccessTokenTTL)
+		&refreshID, sessionID, s.cfg.AccessTokenTTL)
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
@@ -246,6 +248,7 @@ func (s *Storage) setUserinfo(ctx context.Context, info *oidc.UserInfo, userID s
 		info.Name = u.Name
 		info.PreferredUsername = u.Email
 		info.UpdatedAt = oidc.FromTime(u.CreatedAt)
+		info.Picture = profile.PictureURL(s.cfg.Issuer, u.ID, u.PictureUpdatedAt)
 		if u.Organisation != "" {
 			info.AppendClaims("organisation", u.Organisation)
 		}

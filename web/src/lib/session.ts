@@ -16,10 +16,14 @@ export async function loadMe(force = false): Promise<Me | undefined> {
   return me.value
 }
 
-export async function signOut(router: Router) {
-  await api.signOut().catch(() => {})
+/**
+ * Signs the active account out of Keston ID and every app it signed in to.
+ * With other accounts still signed in, goes to the account chooser.
+ */
+export async function signOut(router: Router, all = false) {
+  const res = await api.signOut(all).catch(() => ({ remaining: 0 }))
   me.value = undefined
-  router.push('/sign-in')
+  router.push(res.remaining > 0 ? '/choose-account' : '/sign-in')
 }
 
 /**
@@ -37,6 +41,8 @@ export async function follow(router: Router, flow: Flow, authRequestID?: string)
       return router.replace('/account')
     case 'consent':
       return router.replace({ path: '/consent', query })
+    case 'choose':
+      return router.replace({ path: '/choose-account', query })
     case 'two-step':
       return router.replace({ path: '/two-step', query })
     default:
