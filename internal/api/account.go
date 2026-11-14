@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"encoding/base32"
+	"encoding/base64"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/pquerna/otp/totp"
+	"rsc.io/qr"
 
 	"github.com/thekestongroup/id/internal/secret"
 )
@@ -157,6 +159,11 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 // POST /api/me/two-step/setup: a new authenticator secret, not yet on.
 func (a *API) twoStepSetup(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
+	// A new secret would replace the one in use: turn it off first.
+	if cur.user.TOTPEnabled {
+		writeError(w, http.StatusConflict, "already_on", "Two-step verification is already on.")
+		return
+	}
 	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Keston ID", AccountName: cur.user.Email})
 	if err != nil {
 		serverError(w, r, err)
@@ -166,7 +173,18 @@ func (a *API) twoStepSetup(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"secret": key.Secret(), "otpauthUrl": key.URL()})
+	// The QR code people scan with their authenticator app, as a PNG data URI.
+	code, err := qr.Encode(key.URL(), qr.M)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	code.Scale = 6
+	writeJSON(w, http.StatusOK, map[string]string{
+		"secret":     key.Secret(),
+		"otpauthUrl": key.URL(),
+		"qrCode":     "data:image/png;base64," + base64.StdEncoding.EncodeToString(code.PNG()),
+	})
 }
 
 // POST /api/me/two-step/enable: confirm with a code, get backup codes.

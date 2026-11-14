@@ -89,6 +89,18 @@ or go to http://id.keston.localhost/account.
 The local Keston Work client secret is `keston-work-local-secret` (set
 `KESTON_WORK_LOCAL_CLIENT_SECRET` to change it).
 
+### Local test account
+
+For local testing only (never create it on the live server):
+
+```bash
+docker compose run --rm -e KESTON_ID_PASSWORD="correct horse battery" keston-id users create -email ben.smith@keston.school -name "Ben Smith" -organisation "The Keston School"
+```
+
+It signs in with that email and password, and has two-step verification
+off. If two-step gets turned on and you lose the code, start again with
+`docker compose down -v` (this deletes the local database).
+
 Run several replicas behind Caddy, as on the VPS:
 
 ```bash

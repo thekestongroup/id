@@ -112,7 +112,9 @@ export const api = {
   sessions: () => request<SessionInfo[]>('GET', '/me/sessions'),
   endSession: (id: string) => request<void>('DELETE', `/me/sessions/${encodeURIComponent(id)}`, {}),
   changePassword: (current: string, next: string) => request<void>('POST', '/me/password', { current, new: next }),
-  twoStepSetup: () => request<{ secret: string; otpauthUrl: string }>('POST', '/me/two-step/setup', {}),
+  /** A new authenticator secret (not on until confirmed), with its QR code as a data URI. */
+  twoStepSetup: () =>
+    request<{ secret: string; otpauthUrl: string; qrCode: string }>('POST', '/me/two-step/setup', {}),
   twoStepEnable: (code: string) => request<{ backupCodes: string[] }>('POST', '/me/two-step/enable', { code }),
   twoStepDisable: (password: string) => request<void>('POST', '/me/two-step/disable', { password }),
 }
