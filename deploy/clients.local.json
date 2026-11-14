@@ -1,0 +1,16 @@
+[
+  {
+    "id": "work",
+    "name": "Keston Work",
+    "publisher": "The Keston Group",
+    "verification": "owned",
+    "secretEnv": "KESTON_WORK_LOCAL_CLIENT_SECRET",
+    "redirectUris": ["http://work.keston.localhost/callback"],
+    "postLogoutRedirectUris": ["http://work.keston.localhost/"],
+    "requiredScopes": ["openid", "profile", "email", "staff:read"],
+    "optionalScopes": ["offline_access"],
+    "privacyUrl": "http://work.keston.localhost/privacy",
+    "termsUrl": "http://work.keston.localhost/terms",
+    "devMode": true
+  }
+]

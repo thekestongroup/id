@@ -41,7 +41,7 @@ internal/api/        JSON API for the web UI (/api/…)
 internal/server/     routes: OIDC endpoints, /api, the web UI, health checks
 internal/secret/     AES-GCM for secrets at rest, Argon2id, random tokens
 web/                 Vue + Keston UI; web/dist is embedded by web/embed.go
-deploy/              apps (OAuth clients) to register
+deploy/              apps to register (clients.local.json, clients.json), Caddyfile
 ```
 
 ## Endpoints
@@ -55,13 +55,50 @@ deploy/              apps (OAuth clients) to register
 | `/account` | Account pages |
 | `/healthz`, `/readyz` | Liveness, and readiness (database reachable) |
 
-## Run it locally
+## Addresses
 
-Needs Go 1.27+, pnpm and Postgres.
+| | Local | Live |
+|---|---|---|
+| Keston ID | http://id.keston.localhost | https://id.keston.co |
+| Keston Work | http://work.keston.localhost | https://work.keston.co |
+
+Browsers send every `*.localhost` name to your own machine, so the local
+addresses need no hosts-file changes. Caddy (in `compose.yaml`) routes each
+name to the right container. Until the Keston Work app exists,
+`work.keston.localhost` is a stand-in page that shows what Keston ID sent
+back (see `deploy/Caddyfile`).
+
+## Run it locally (Docker)
 
 ```bash
-createdb keston_id
+docker compose up --build
 ```
+
+No `.env` is needed: the defaults are the local ones. `setup` runs once to
+apply migrations and register the local apps (`deploy/clients.local.json`),
+then Keston ID and Caddy start. Create an account:
+
+```bash
+docker compose run --rm -it keston-id users create -email you@keston.school -name "Your Name" -organisation "The Keston School"
+```
+
+Then sign in to Keston Work through Keston ID:
+[http://id.keston.localhost/authorize?client_id=work&…](http://id.keston.localhost/authorize?client_id=work&redirect_uri=http%3A%2F%2Fwork.keston.localhost%2Fcallback&response_type=code&scope=openid%20profile%20email%20staff%3Aread%20offline_access&state=test&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGkSz9IcjM&code_challenge_method=S256),
+or go to http://id.keston.localhost/account.
+
+The local Keston Work client secret is `keston-work-local-secret` (set
+`KESTON_WORK_LOCAL_CLIENT_SECRET` to change it).
+
+Run several replicas behind Caddy, as on the VPS:
+
+```bash
+docker compose up -d --scale keston-id=3
+```
+
+## Run it without Docker
+
+Needs Go 1.27+, pnpm and Postgres. Keston ID is then at
+http://id.keston.localhost:4444.
 
 ```bash
 pnpm -C web install && pnpm -C web build
@@ -72,65 +109,42 @@ export KESTON_ID_DATABASE_URL="postgres://localhost:5432/keston_id?sslmode=disab
 ```
 
 ```bash
-go run ./cmd/keston-id clients sync deploy/clients.dev.json
-```
-
-```bash
-go run ./cmd/keston-id users create -email you@keston.school -name "Your Name" -organisation "The Keston School"
+go run ./cmd/keston-id clients sync deploy/clients.local.json
 ```
 
 ```bash
 go run ./cmd/keston-id
 ```
 
-Then open
-`http://localhost:4444/authorize?client_id=demo&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&response_type=code&scope=openid%20profile%20email%20offline_access&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGkSz9IcjM&code_challenge_method=S256&state=test`,
-or `http://localhost:4444/account`.
-
 To work on the UI with hot reload, run `pnpm -C web dev` too, and start the
 server with `KESTON_ID_DEV_WEB_URL=http://localhost:5180`: the Go server then
 passes UI requests to Vite.
 
 With an `http://` issuer, Keston ID runs in development mode: cookies aren't
-`Secure` and a built-in secret key is used. Never use that in production.
+`Secure` and a built-in secret key is used. An `https://` issuer refuses to
+start without a real `KESTON_ID_SECRET_KEY`.
 
-## Run it with Docker
+## Live on the VPS
 
-```bash
-cp .env.example .env
-```
+1. Point DNS for `id.keston.co` and `work.keston.co` at the VPS, and open
+   ports 80 and 443.
+2. Next to `compose.yaml`, copy `.env.live.example` to `.env` and fill it in:
+   the secret key, a Postgres password and each app's client secret. Keep
+   the secret key safe and backed up: it decrypts signing keys and two-step
+   secrets.
+3. Start it:
 
-Fill in `.env` (at least `KESTON_ID_SECRET_KEY` and the client secrets), then:
+   ```bash
+   docker compose up -d --build --scale keston-id=2
+   ```
 
-```bash
-docker compose up --build
-```
-
-`setup` runs once: it applies migrations and registers the apps in
-`deploy/clients.json` (set `KESTON_ID_CLIENTS_FILE=clients.dev.json` in `.env`
-for the local demo app instead). Then `keston-id` starts on
-http://localhost:4444. Create an account with:
-
-```bash
-docker compose run --rm -it keston-id users create -email you@keston.school -name "Your Name"
-```
-
-## On the VPS
-
-1. Set `KESTON_ID_ISSUER=https://id.keston.co` and a real
-   `KESTON_ID_SECRET_KEY` (`openssl rand -base64 32`) in `.env`. Keep the key
-   safe: it decrypts signing keys and two-step secrets.
-2. In `compose.yaml`, remove `ports:` from `keston-id`, and attach your load
-   balancer / reverse proxy to the `keston` network, sending `id.keston.co`
-   to `keston-id:4444` and terminating HTTPS. It should pass
-   `X-Forwarded-For`.
-3. Scale with `docker compose up -d --scale keston-id=3`. Point the load
-   balancer's health check at `/readyz`.
+   Caddy gets HTTPS certificates for both names automatically, and spreads
+   requests across the replicas.
 4. Back up the `postgres` volume.
 
-For Kubernetes later: the same image, `keston-id clients sync …` as a Job (or
-init container), `serve` as a Deployment, `/healthz` and `/readyz` as
-liveness and readiness probes.
+For Kubernetes later: the same image (`ghcr.io/thekestongroup/id`),
+`keston-id clients sync …` as a Job, `serve` as a Deployment, `/healthz` and
+`/readyz` as liveness and readiness probes, and an Ingress in place of Caddy.
 
 ## Registering an app
 

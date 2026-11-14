@@ -1,13 +1,48 @@
-# Keston ID with Postgres. Local:  docker compose up --build
-# On the VPS, put your load balancer / reverse proxy on the "keston" network
-# and send id.keston.co to keston-id:4444. More replicas:
-#   docker compose up -d --scale keston-id=3
-# Every replica is stateless (sessions, keys and tokens are in Postgres), so
-# the load balancer needs no sticky sessions.
+# Keston ID, Postgres, and Caddy in front.
+#
+# Local (no .env needed):   docker compose up --build
+#   http://id.keston.localhost     Keston ID
+#   http://work.keston.localhost   Keston Work (a stand-in until the app exists)
+#
+# Live on the VPS: copy .env.live.example to .env and fill it in. The same
+# file then serves https://id.keston.co and https://work.keston.co.
+#
+# More replicas: docker compose up -d --scale keston-id=3. Each is stateless
+# (sessions, keys and tokens are in Postgres), so Caddy spreads requests
+# across them with no sticky sessions.
 
-name: keston-id
+name: keston
+
+# Settings every keston-id container shares. Defaults are for local use.
+x-keston-id-env: &keston-id-env
+  KESTON_ID_ISSUER: ${KESTON_ID_ISSUER:-http://id.keston.localhost}
+  KESTON_ID_SECRET_KEY: ${KESTON_ID_SECRET_KEY:-}
+  KESTON_ID_DATABASE_URL: postgres://keston:${POSTGRES_PASSWORD:-keston}@postgres:5432/keston_id?sslmode=disable
+  KESTON_ID_ACCESS_TOKEN_TTL: ${KESTON_ID_ACCESS_TOKEN_TTL:-15m}
+  KESTON_ID_REFRESH_TOKEN_TTL: ${KESTON_ID_REFRESH_TOKEN_TTL:-720h}
+  KESTON_ID_SESSION_TTL: ${KESTON_ID_SESSION_TTL:-336h}
 
 services:
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      KESTON_ID_SITE: ${KESTON_ID_SITE:-http://id.keston.localhost}
+      KESTON_WORK_SITE: ${KESTON_WORK_SITE:-http://work.keston.localhost}
+      KESTON_ID_ISSUER: ${KESTON_ID_ISSUER:-http://id.keston.localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@keston.co}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      keston-id: { condition: service_healthy }
+    networks: [keston]
+
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
@@ -24,33 +59,31 @@ services:
       timeout: 3s
       retries: 10
 
-  # One-off: apply migrations and register the apps in deploy/clients.json,
-  # before any replica starts serving.
+  # One-off, before any replica serves: migrations, then register the apps
+  # (deploy/clients.local.json locally, deploy/clients.json live).
   setup:
     build: .
-    image: ghcr.io/thekestongroup/keston-id:latest
-    command: ["clients", "sync", "/etc/keston-id/${KESTON_ID_CLIENTS_FILE:-clients.json}"]
-    env_file: [{ path: .env, required: false }]
+    image: ghcr.io/thekestongroup/id:latest
+    command: ["clients", "sync", "/etc/keston-id/${KESTON_ID_CLIENTS_FILE:-clients.local.json}"]
     environment:
-      KESTON_ID_DATABASE_URL: postgres://keston:${POSTGRES_PASSWORD:-keston}@postgres:5432/keston_id?sslmode=disable
+      <<: *keston-id-env
+      # Local app secret (clients.local.json). Live secrets have no defaults.
+      KESTON_WORK_LOCAL_CLIENT_SECRET: ${KESTON_WORK_LOCAL_CLIENT_SECRET:-keston-work-local-secret}
+      KESTON_LEARN_CLIENT_SECRET: ${KESTON_LEARN_CLIENT_SECRET:-}
+      KESTON_SCHOOLS_CLIENT_SECRET: ${KESTON_SCHOOLS_CLIENT_SECRET:-}
+      KESTON_WORK_CLIENT_SECRET: ${KESTON_WORK_CLIENT_SECRET:-}
     depends_on:
       postgres: { condition: service_healthy }
     networks: [keston]
     restart: "no"
 
   keston-id:
-    image: ghcr.io/thekestongroup/keston-id:latest
+    image: ghcr.io/thekestongroup/id:latest
     restart: unless-stopped
-    env_file: [{ path: .env, required: false }]
-    environment:
-      KESTON_ID_DATABASE_URL: postgres://keston:${POSTGRES_PASSWORD:-keston}@postgres:5432/keston_id?sslmode=disable
+    environment: *keston-id-env
     depends_on:
       setup: { condition: service_completed_successfully }
     networks: [keston]
-    # Locally, reach it at http://localhost:4444. On the VPS, remove this
-    # and let the load balancer reach it over the network.
-    ports:
-      - "127.0.0.1:4444:4444"
     deploy:
       resources:
         limits: { memory: 128M }
@@ -61,3 +94,5 @@ networks:
 
 volumes:
   postgres:
+  caddy-data:
+  caddy-config:
