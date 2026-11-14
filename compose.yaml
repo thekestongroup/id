@@ -3,6 +3,7 @@
 # Local (no .env needed):   docker compose up --build
 #   http://id.keston.localhost     Keston ID
 #   http://work.keston.localhost   Keston Work (a stand-in until the app exists)
+#   http://admin.keston.localhost  Keston Admin (run the admin repo's compose too)
 #
 # Live on the VPS: copy .env.live.example to .env and fill it in. The same
 # file then serves https://id.keston.co and https://work.keston.co.
@@ -33,6 +34,7 @@ services:
     environment:
       KESTON_ID_SITE: ${KESTON_ID_SITE:-http://id.keston.localhost}
       KESTON_WORK_SITE: ${KESTON_WORK_SITE:-http://work.keston.localhost}
+      KESTON_ADMIN_SITE: ${KESTON_ADMIN_SITE:-http://admin.keston.localhost}
       KESTON_ID_ISSUER: ${KESTON_ID_ISSUER:-http://id.keston.localhost}
       ACME_EMAIL: ${ACME_EMAIL:-admin@keston.co}
     volumes:

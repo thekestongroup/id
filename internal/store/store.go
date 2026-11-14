@@ -34,7 +34,10 @@ type User struct {
 	ID                string
 	Email             string
 	Name              string
-	Organisation      string
+	OrganisationID    string
+	Organisation      string // the organisation's name
+	Role              string // "member" or "global_admin"
+	PlatformAdmin     bool
 	PasswordHash      string
 	PasswordChangedAt time.Time
 	TOTPSecret        []byte // encrypted
@@ -46,13 +49,18 @@ type User struct {
 	CreatedAt         time.Time
 }
 
-const userColumns = `id, email, name, organisation, password_hash, password_changed_at, totp_secret, totp_enabled,
-	backup_codes, status, failed_logins, locked_until, created_at`
+// The organisation's name comes from a subquery, so the same columns work
+// after SELECT … FROM users and after INSERT/UPDATE … RETURNING.
+const userColumns = `id, email, name, organisation_id,
+	(SELECT o.name FROM organisations o WHERE o.id = users.organisation_id) AS organisation_name, role, platform_admin,
+	password_hash, password_changed_at, totp_secret, totp_enabled, backup_codes, status, failed_logins, locked_until,
+	created_at`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Organisation, &u.PasswordHash, &u.PasswordChangedAt, &u.TOTPSecret,
-		&u.TOTPEnabled, &u.BackupCodes, &u.Status, &u.FailedLogins, &u.LockedUntil, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.OrganisationID, &u.Organisation, &u.Role, &u.PlatformAdmin,
+		&u.PasswordHash, &u.PasswordChangedAt, &u.TOTPSecret, &u.TOTPEnabled, &u.BackupCodes, &u.Status, &u.FailedLogins,
+		&u.LockedUntil, &u.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -67,9 +75,89 @@ func (s *Store) UserByEmail(ctx context.Context, email string) (*User, error) {
 	return scanUser(s.DB.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE lower(email) = lower($1)`, email))
 }
 
-func (s *Store) CreateUser(ctx context.Context, email, name, organisation, passwordHash string) (*User, error) {
-	return scanUser(s.DB.QueryRow(ctx, `INSERT INTO users (email, name, organisation, password_hash)
-		VALUES ($1, $2, $3, $4) RETURNING `+userColumns, email, name, organisation, passwordHash))
+// NewUser is an account to create. Email is username@ the organisation's
+// domain.
+type NewUser struct {
+	OrganisationID string
+	Email          string
+	Name           string
+	Role           string
+	PlatformAdmin  bool
+	PasswordHash   string
+}
+
+func (s *Store) CreateUser(ctx context.Context, q Querier, n NewUser) (*User, error) {
+	if n.Role == "" {
+		n.Role = "member"
+	}
+	return scanUser(q.QueryRow(ctx, `INSERT INTO users (organisation_id, email, name, role, platform_admin, password_hash)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+userColumns,
+		n.OrganisationID, n.Email, n.Name, n.Role, n.PlatformAdmin, n.PasswordHash))
+}
+
+func (s *Store) UsersInOrganisation(ctx context.Context, orgID string) ([]User, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+userColumns+` FROM users WHERE organisation_id = $1 ORDER BY name`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (User, error) {
+		u, err := scanUser(r)
+		if err != nil {
+			return User{}, err
+		}
+		return *u, nil
+	})
+}
+
+// SetUserStatus disables or re-enables an account. Disabling also signs it
+// out everywhere and stops its apps' tokens working.
+func (s *Store) SetUserStatus(ctx context.Context, userID, status string) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `UPDATE users SET status = $2, updated_at = now() WHERE id = $1`, userID, status); err != nil {
+		return err
+	}
+	if status == "disabled" {
+		for _, q := range []string{
+			`DELETE FROM sessions WHERE user_id = $1`,
+			`DELETE FROM access_tokens WHERE user_id = $1`,
+			`DELETE FROM refresh_tokens WHERE user_id = $1`,
+		} {
+			if _, err := tx.Exec(ctx, q, userID); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// ResetPassword sets a new password for someone (by an admin), unlocks the
+// account and signs it out everywhere.
+func (s *Store) ResetPassword(ctx context.Context, userID, hash string) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2, password_changed_at = now(), failed_logins = 0,
+		locked_until = NULL, updated_at = now() WHERE id = $1`, userID, hash); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) SetPlatformAdmin(ctx context.Context, email string, on bool) error {
+	tag, err := s.DB.Exec(ctx, `UPDATE users SET platform_admin = $2 WHERE lower(email) = lower($1)`, email, on)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
 }
 
 // RecordLogin counts failed attempts; five in a row lock the account for 15

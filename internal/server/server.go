@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 	"golang.org/x/text/language"
 
+	"github.com/thekestongroup/id/internal/adminapi"
 	"github.com/thekestongroup/id/internal/api"
 	"github.com/thekestongroup/id/internal/config"
 	"github.com/thekestongroup/id/internal/oidcstore"
@@ -60,6 +62,14 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 	})
 
 	r.Mount("/api", a.Routes())
+
+	// Keston Admin's API. Caddy serves it at admin.keston.co/api/…, so the
+	// admin app calls it on its own origin (no CORS).
+	verify := func(ctx context.Context, token string) (*oidc.AccessTokenClaims, error) {
+		v := provider.AccessTokenVerifier(op.ContextWithIssuer(ctx, cfg.Issuer))
+		return op.VerifyAccessToken[*oidc.AccessTokenClaims](ctx, token, v)
+	}
+	r.Mount("/admin/v1", adminapi.New(st, verify).Routes())
 
 	// Cancel on the consent prompt, or prompt=none that needs interaction:
 	// send the OAuth error back to the app.

@@ -3,7 +3,12 @@
 //	keston-id                       serve (migrates and creates a signing key first)
 //	keston-id migrate               apply database migrations and exit
 //	keston-id clients sync FILE     register / update apps from a JSON file
-//	keston-id users create          create an account (password from KESTON_ID_PASSWORD or stdin)
+//	keston-id orgs create           create an organisation and its first global admin
+//	keston-id users create          create an account in an existing organisation (by email domain)
+//	keston-id users platform-admin  make an account a platform admin (or -off)
+//
+// Passwords come from KESTON_ID_PASSWORD, or are read from stdin.
+//
 //	keston-id healthcheck           exit 0 if this container is ready (for docker)
 package main
 
@@ -27,6 +32,7 @@ import (
 	"github.com/thekestongroup/id/internal/config"
 	"github.com/thekestongroup/id/internal/db"
 	"github.com/thekestongroup/id/internal/oidcstore"
+	"github.com/thekestongroup/id/internal/policy"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/server"
 	"github.com/thekestongroup/id/internal/store"
@@ -82,11 +88,20 @@ func run(args []string) error {
 			return errors.New("usage: keston-id clients sync FILE")
 		}
 		return syncClients(ctx, st, args[1])
-	case "users":
+	case "orgs":
 		if len(args) == 0 || args[0] != "create" {
-			return errors.New("usage: keston-id users create -email … -name … [-organisation …]")
+			return errors.New("usage: keston-id orgs create -name … -domain … -admin-username … -admin-name …")
 		}
-		return createUser(ctx, st, args[1:])
+		return createOrg(ctx, st, args[1:])
+	case "users":
+		switch {
+		case len(args) > 0 && args[0] == "create":
+			return createUser(ctx, st, args[1:])
+		case len(args) > 0 && args[0] == "platform-admin":
+			return platformAdmin(ctx, st, args[1:])
+		}
+		return errors.New("usage: keston-id users create -email … -name … [-role global_admin] [-platform-admin]\n" +
+			"       keston-id users platform-admin -email … [-off]")
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
@@ -199,34 +214,103 @@ func syncClients(ctx context.Context, st *store.Store, file string) error {
 	return nil
 }
 
+func readPassword() (string, error) {
+	if password := os.Getenv("KESTON_ID_PASSWORD"); password != "" {
+		return password, nil
+	}
+	fmt.Fprint(os.Stderr, "Password: ")
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// createOrg makes an organisation and its first global admin
+// (username@domain), as Keston Admin's wizard does.
+func createOrg(ctx context.Context, st *store.Store, args []string) error {
+	fs := flag.NewFlagSet("orgs create", flag.ContinueOnError)
+	name := fs.String("name", "", "organisation name")
+	domain := fs.String("domain", "", "its domain, e.g. greenfield.sch.uk")
+	adminUser := fs.String("admin-username", "", "first global admin's username (before the @)")
+	adminName := fs.String("admin-name", "", "first global admin's full name")
+	platform := fs.Bool("platform-admin", false, "make the global admin a platform admin too (The Keston Group)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *name == "" || *domain == "" || *adminUser == "" || *adminName == "" {
+		return errors.New("-name, -domain, -admin-username and -admin-name are required")
+	}
+	password, err := readPassword()
+	if err != nil {
+		return err
+	}
+	if failed := (policy.Policy{}).Check(password, *adminUser); len(failed) > 0 {
+		return errors.New(policy.Message(failed))
+	}
+	org, admin, err := st.CreateOrganisation(ctx, *name, strings.ToLower(*domain), store.NewUser{
+		Email: strings.ToLower(*adminUser) + "@" + strings.ToLower(*domain), Name: *adminName,
+		PlatformAdmin: *platform, PasswordHash: secret.HashPassword(password),
+	})
+	if err != nil {
+		return err
+	}
+	slog.Info("organisation created", "id", org.ID, "domain", org.Domain, "admin", admin.Email)
+	return nil
+}
+
+// createUser adds an account to the organisation that owns its email's
+// domain.
 func createUser(ctx context.Context, st *store.Store, args []string) error {
 	fs := flag.NewFlagSet("users create", flag.ContinueOnError)
-	email := fs.String("email", "", "sign-in email")
+	email := fs.String("email", "", "sign-in email: username@ an organisation's domain")
 	name := fs.String("name", "", "full name")
-	org := fs.String("organisation", "", "school or organisation")
+	role := fs.String("role", "member", "member or global_admin")
+	platform := fs.Bool("platform-admin", false, "a platform admin (The Keston Group)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *email == "" || *name == "" {
 		return errors.New("-email and -name are required")
 	}
-	password := os.Getenv("KESTON_ID_PASSWORD")
-	if password == "" {
-		fmt.Fprint(os.Stderr, "Password: ")
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-		if err != nil && line == "" {
-			return err
-		}
-		password = strings.TrimRight(line, "\r\n")
+	if *role != "member" && *role != "global_admin" {
+		return errors.New("-role must be member or global_admin")
 	}
-	if len([]rune(password)) < 12 {
-		return errors.New("password must be at least 12 characters")
+	username, domain, ok := strings.Cut(strings.ToLower(*email), "@")
+	if !ok {
+		return errors.New("-email must be username@domain")
 	}
-	u, err := st.CreateUser(ctx, *email, *name, *org, secret.HashPassword(password))
+	org, err := st.OrganisationByDomain(ctx, domain)
+	if err != nil {
+		return fmt.Errorf("no organisation has the domain %s: create it with keston-id orgs create", domain)
+	}
+	password, err := readPassword()
 	if err != nil {
 		return err
 	}
-	slog.Info("user created", "id", u.ID, "email", u.Email)
+	if failed := org.PasswordPolicy.Check(password, username); len(failed) > 0 {
+		return errors.New(policy.Message(failed))
+	}
+	u, err := st.CreateUser(ctx, st.DB, store.NewUser{OrganisationID: org.ID, Email: strings.ToLower(*email),
+		Name: *name, Role: *role, PlatformAdmin: *platform, PasswordHash: secret.HashPassword(password)})
+	if err != nil {
+		return err
+	}
+	slog.Info("user created", "id", u.ID, "email", u.Email, "organisation", org.Name)
+	return nil
+}
+
+func platformAdmin(ctx context.Context, st *store.Store, args []string) error {
+	fs := flag.NewFlagSet("users platform-admin", flag.ContinueOnError)
+	email := fs.String("email", "", "the account")
+	off := fs.Bool("off", false, "remove platform admin instead")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := st.SetPlatformAdmin(ctx, *email, !*off); err != nil {
+		return fmt.Errorf("%s: %w", *email, err)
+	}
+	slog.Info("platform admin updated", "email", *email, "platformAdmin", !*off)
 	return nil
 }
 

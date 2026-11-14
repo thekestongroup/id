@@ -7,16 +7,14 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/pquerna/otp/totp"
 	"rsc.io/qr"
 
+	"github.com/thekestongroup/id/internal/policy"
 	"github.com/thekestongroup/id/internal/secret"
 )
-
-const minPasswordLength = 12
 
 // GET /api/me
 func (a *API) me(w http.ResponseWriter, r *http.Request) {
@@ -27,6 +25,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 			"twoStep":           cur.user.TOTPEnabled,
 			"backupCodesLeft":   len(cur.user.BackupCodes),
 			"passwordChangedAt": cur.user.PasswordChangedAt,
+			"passwordRules":     a.store.PolicyFor(r.Context(), cur.user.OrganisationID).Rules(),
 		},
 	})
 }
@@ -136,8 +135,11 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "current", "That isn't your current password")
 		return
 	}
-	if utf8.RuneCountInString(body.New) < minPasswordLength {
-		writeFieldError(w, "new", "Use at least 12 characters")
+	// The organisation's rules (on top of the baseline). The username can't
+	// be the password either.
+	pol := a.store.PolicyFor(r.Context(), cur.user.OrganisationID)
+	if failed := pol.Check(body.New, username(cur.user.Email)); len(failed) > 0 {
+		writeFieldError(w, "new", policy.Message(failed))
 		return
 	}
 	if body.New == body.Current {
@@ -262,4 +264,10 @@ func backupCodes(n int) ([]string, []string) {
 		hashes[i] = secret.Hash(raw)
 	}
 	return codes, hashes
+}
+
+// username is the part of an email before the @.
+func username(email string) string {
+	name, _, _ := strings.Cut(email, "@")
+	return name
 }
