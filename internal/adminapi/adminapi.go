@@ -484,6 +484,10 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Role     string `json:"role"`
+		// Keston ID makes up a password meeting the policy (Password is
+		// ignored), returned once in the response. They always choose their
+		// own at first sign-in.
+		GeneratePassword bool `json:"generatePassword"`
 		// They choose their own password when they first sign in (default on).
 		RequirePasswordChange *bool `json:"requirePasswordChange"`
 	}
@@ -507,7 +511,10 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "username", usernameHelp)
 		return
 	}
-	if failed := org.PasswordPolicy.Check(body.Password, user); len(failed) > 0 {
+	if body.GeneratePassword {
+		body.Password = org.PasswordPolicy.Generate(user)
+		body.RequirePasswordChange = nil // on
+	} else if failed := org.PasswordPolicy.Check(body.Password, user); len(failed) > 0 {
 		writeFieldError(w, "password", policy.Message(failed))
 		return
 	}
@@ -536,6 +543,13 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("account created", "user", created.ID, "organisation", org.ID, "by", caller(r).ID)
 	a.audit(r, store.ActionUserCreated, aboutUser(created), "Role: "+roleLabel(created.Role))
+	if body.GeneratePassword {
+		writeJSON(w, http.StatusCreated, struct {
+			userJSON
+			Password string `json:"password"`
+		}{a.userView(created), body.Password})
+		return
+	}
 	writeJSON(w, http.StatusCreated, a.userView(created))
 }
 
