@@ -41,6 +41,24 @@ export interface Flow {
   client?: ClientView
   scopes?: { required: ScopeInfo[]; optional: ScopeInfo[] }
   user?: UserView
+  /** At the MFA step: the ways this account can do it. */
+  mfa?: { app: boolean; passkey: boolean }
+}
+
+/** A passkey or security key on the account. */
+export interface Passkey {
+  id: string
+  name: string
+  createdAt: string
+  lastUsedAt?: string
+  /** Synced between devices by a password manager, rather than kept on one device or security key. */
+  synced: boolean
+}
+
+/** A WebAuthn ceremony the browser answers: its token and the options for navigator.credentials. */
+export interface PasskeyCeremony {
+  ceremony: string
+  options: Record<string, any>
 }
 
 /** Which profile fields this person may change (their organisation decides). */
@@ -55,7 +73,14 @@ export interface Me {
   username: string
   domain: string
   editable: Editable
-  security: { mfa: boolean; backupCodesLeft: number; passwordChangedAt: string }
+  security: {
+    /** MFA is on: an authenticator app, or any passkey. */
+    mfa: boolean
+    authenticatorApp: boolean
+    passkeys: number
+    backupCodesLeft: number
+    passwordChangedAt: string
+  }
 }
 
 export interface ConnectedApp {
@@ -165,4 +190,20 @@ export const api = {
     request<{ secret: string; otpauthUrl: string; qrCode: string }>('POST', '/me/mfa/setup', {}),
   mfaEnable: (code: string) => request<{ backupCodes: string[] }>('POST', '/me/mfa/enable', { code }),
   mfaDisable: (password: string) => request<void>('POST', '/me/mfa/disable', { password }),
+
+  // Passkeys and security keys (see passkeys.ts for the browser side).
+  signInPasskeyOptions: () => request<PasskeyCeremony>('POST', '/sign-in/passkey/options', {}),
+  signInPasskey: (ceremony: string, credential: unknown, authRequestID?: string) =>
+    request<Flow>('POST', '/sign-in/passkey', { ceremony, credential, authRequestID }),
+  mfaPasskeyOptions: () => request<PasskeyCeremony>('POST', '/mfa/passkey/options', {}),
+  mfaPasskey: (ceremony: string, credential: unknown, authRequestID?: string) =>
+    request<Flow>('POST', '/mfa/passkey', { ceremony, credential, authRequestID }),
+  passkeys: () => request<Passkey[]>('GET', '/me/passkeys'),
+  /** Starts adding one. Without a recent sign-in, needs the password (error code "reauthenticate"). */
+  passkeyOptions: (password?: string) => request<PasskeyCeremony>('POST', '/me/passkeys/options', { password }),
+  addPasskey: (ceremony: string, name: string, credential: unknown) =>
+    request<Passkey>('POST', '/me/passkeys', { ceremony, name, credential }),
+  renamePasskey: (id: string, name: string) =>
+    request<Passkey>('PATCH', `/me/passkeys/${encodeURIComponent(id)}`, { name }),
+  removePasskey: (id: string) => request<void>('DELETE', `/me/passkeys/${encodeURIComponent(id)}`, {}),
 }

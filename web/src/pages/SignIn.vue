@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { Lock, Mail } from '@lucide/vue'
-import { Avatar, Button, type ButtonStatus, Card, Input, InputPassword, Link } from '@thekestongroup/ui'
-import { reactive, ref } from 'vue'
+import { KeyRound, Lock, Mail } from '@lucide/vue'
+import { Avatar, Button, type ButtonStatus, Card, Divider, Input, InputPassword, Link } from '@thekestongroup/ui'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import AppName from '../components/AppName.vue'
 import FlowState from '../components/FlowState.vue'
 import KestonIdPage from '../components/KestonIdPage.vue'
 import { api, ApiError } from '../lib/api'
+import { autofillSupported, cancelled, passkeyError, passkeySignIn, passkeysSupported } from '../lib/passkeys'
 import { useFlow } from '../lib/useFlow'
 
 /**
@@ -37,6 +38,43 @@ async function signIn() {
     else errors.form = e instanceof Error ? e.message : String(e)
   }
 }
+
+// Passkeys: offered in the email field's autofill where the browser can,
+// and with a button (which also finds security keys and phones nearby).
+const canUsePasskeys = passkeysSupported()
+const passkeyStatus = ref<ButtonStatus>('idle')
+let autofill: AbortController | undefined
+
+async function waitForAutofill() {
+  if (!(await autofillSupported())) return
+  autofill = new AbortController()
+  try {
+    const flow = await passkeySignIn(authRequestID.value, autofill.signal)
+    passkeyStatus.value = 'success'
+    await next(flow)
+  } catch (e) {
+    if (!cancelled(e)) errors.form = passkeyError(e)
+  }
+}
+
+async function signInWithPasskey() {
+  // Only one passkey request at a time: the button's replaces autofill's.
+  autofill?.abort()
+  errors.form = undefined
+  passkeyStatus.value = 'loading'
+  try {
+    const flow = await passkeySignIn(authRequestID.value)
+    passkeyStatus.value = 'success'
+    await next(flow)
+  } catch (e) {
+    passkeyStatus.value = 'idle'
+    if (!cancelled(e)) errors.form = passkeyError(e)
+    waitForAutofill()
+  }
+}
+
+onMounted(waitForAutofill)
+onBeforeUnmount(() => autofill?.abort())
 </script>
 
 <template>
@@ -56,7 +94,7 @@ async function signIn() {
           </div>
 
           <form class="flex flex-col gap-4" novalidate @submit.prevent="signIn">
-            <Input v-model="form.email" label="Email" type="email" autocomplete="username" :error-text="errors.email">
+            <Input v-model="form.email" label="Email" type="email" autocomplete="username webauthn" :error-text="errors.email">
               <template #leading><Mail /></template>
             </Input>
             <!-- Forgot password? shows by the label but is reached by Tab after
@@ -77,6 +115,19 @@ async function signIn() {
               Sign in
             </Button>
           </form>
+
+          <template v-if="canUsePasskeys">
+            <Divider label="or" />
+            <Button
+              :status="passkeyStatus"
+              loading-text="Waiting for your passkey"
+              success-text="Signed in"
+              @click="signInWithPasskey"
+            >
+              <template #leading><KeyRound /></template>
+              Sign in with a passkey
+            </Button>
+          </template>
         </div>
         <template #footer>
           <p class="text-center text-xs text-black/65">
