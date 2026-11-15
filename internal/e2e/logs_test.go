@@ -31,6 +31,7 @@ import (
 	"github.com/thekestongroup/id/internal/api"
 	"github.com/thekestongroup/id/internal/config"
 	"github.com/thekestongroup/id/internal/db"
+	"github.com/thekestongroup/id/internal/principal"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 	"github.com/thekestongroup/id/kit/auth"
@@ -85,13 +86,17 @@ func setup(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	pub := jose.JSONWebKey{Key: &key.PublicKey, KeyID: "k1", Algorithm: "RS256", Use: "sig"}
-	admin := adminapi.New(st, auth.NewVerifier(issuer, auth.AudienceKestonID, auth.StaticKeys{pub}), issuer)
+	verifier := auth.NewVerifier(issuer, auth.AudienceKestonID, auth.StaticKeys{pub})
+	admin := adminapi.New(st, issuer)
 	cfg := &config.Config{Issuer: issuer, SessionTTL: time.Hour, AuthRequestTTL: time.Hour}
 	r := chi.NewRouter()
 	id := api.New(st, cfg, func(context.Context, string) error { return nil })
 	r.Mount("/api", id.Routes())
 	r.Get("/support-sign-in", id.SupportSignIn)
-	r.Mount("/admin/v1", admin.Routes())
+	r.Route("/v1", func(r chi.Router) {
+		r.Use(principal.Middleware(st, verifier, id.CookieSession))
+		r.Mount("/", admin.Routes())
+	})
 	srv := httptest.NewTLSServer(r)
 	t.Cleanup(srv.Close)
 	return &env{t: t, st: st, admin: admin, srv: srv, key: key}
@@ -124,7 +129,7 @@ func (e *env) call(tok, method, path string, body any, ip string) (int, []byte) 
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest(method, e.srv.URL+"/admin/v1"+path, rd)
+	req, _ := http.NewRequest(method, e.srv.URL+"/v1"+path, rd)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	if ip != "" {
 		req.Header.Set("X-Forwarded-For", ip)
