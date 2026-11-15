@@ -110,6 +110,7 @@ const (
 	SignInMFA        = "mfa"
 	SignInBackupCode = "backup_code"
 	SignInPasskey    = "passkey"
+	SignInAccessPass = "access_pass"
 	SignInSupport    = "support"
 	// Signing in to an app (after Keston ID itself).
 	SignInApp = "app"
@@ -124,6 +125,7 @@ const (
 	ReasonExpired        = "expired"
 	ReasonSupportAccount = "support_account"
 	ReasonMFAFailed      = "mfa_failed"
+	ReasonWrongPass      = "wrong_access_pass"
 	ReasonAppDisabled    = "app_disabled"
 )
 

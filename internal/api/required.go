@@ -279,14 +279,26 @@ func (a *API) signInWithPass(w http.ResponseWriter, r *http.Request) {
 			serverError(w, r, err)
 			return
 		}
+		a.logSignIn(r, store.SignIn{Email: body.Email, Method: store.SignInAccessPass, AuthRequestID: body.AuthRequestID,
+			Reason: store.ReasonUnknownUser})
 		writeFieldError(w, "code", wrong)
 		return
 	}
+	log := func(success bool, reason string) {
+		a.logSignIn(r, store.SignIn{User: user, Method: store.SignInAccessPass, AuthRequestID: body.AuthRequestID,
+			Success: success, Reason: reason})
+	}
 	if user.LockedUntil != nil && user.LockedUntil.After(time.Now()) {
+		log(false, store.ReasonLocked)
 		writeError(w, http.StatusTooManyRequests, "locked", "Too many attempts. Wait 15 minutes and try again.")
 		return
 	}
 	if user.IsSupport() || !user.Usable() {
+		why := store.ReasonSupportAccount
+		if !user.IsSupport() {
+			why = failReason(user)
+		}
+		log(false, why)
 		writeFieldError(w, "code", wrong)
 		return
 	}
@@ -297,10 +309,12 @@ func (a *API) signInWithPass(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		_ = a.store.RecordLogin(ctx, user.ID, false)
+		log(false, store.ReasonWrongPass)
 		writeFieldError(w, "code", wrong)
 		return
 	}
 	_ = a.store.RecordLogin(ctx, user.ID, true)
+	log(true, "")
 	token, sess, err := a.store.CreateSession(ctx, user.ID, store.StageActions, []string{amrAccessPass}, r.UserAgent(),
 		clientIP(r), a.cfg.SessionTTL)
 	if err != nil {
