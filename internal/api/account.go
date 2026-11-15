@@ -16,12 +16,14 @@ import (
 	"rsc.io/qr"
 
 	"github.com/thekestongroup/id/internal/policy"
+	"github.com/thekestongroup/id/internal/principal"
 	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 )
 
-// GET /api/me
+// GET /v1/me: you, for every app: your account (Keston ID's account pages),
+// and your organisation and permissions (Keston Admin).
 func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	org, err := a.store.OrganisationByID(r.Context(), cur.user.OrganisationID)
@@ -34,10 +36,21 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	u := cur.user
+	name, _, _ := strings.Cut(u.Email, "@")
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user":     a.viewUser(cur.user),
-		"username": username(cur.user.Email),
-		"domain":   org.Domain,
+		"user": map[string]any{
+			"id": u.ID, "name": u.Name, "email": u.Email, "username": name, "organisation": u.Organisation,
+			"avatar": profile.PictureURL(a.cfg.Issuer, u.ID, u.PictureUpdatedAt), "role": u.Role,
+			"platformAdmin": u.PlatformAdmin, "status": u.Status, "mfa": u.TOTPEnabled || passkeys > 0, "passkeys": passkeys,
+			"createdAt": u.CreatedAt, "passwordChangedAt": u.PasswordChangedAt,
+			"support": u.IsSupport(), "expiresAt": u.ExpiresAt,
+		},
+		"organisation":  org,
+		"permissions":   principal.From(r.Context()).Perms.List(),
+		"platformAdmin": u.PlatformAdmin,
+		"username":      username(cur.user.Email),
+		"domain":        org.Domain,
 		// What this person may change themselves (their organisation decides).
 		"editable": org.ProfileEditing,
 		"security": map[string]any{
@@ -52,7 +65,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/me/apps: the apps on this account, from what the organisation
+// GET /v1/me/apps: the apps on this account, from what the organisation
 // sets (Keston Admin → Apps, by default and per group):
 //   - "forced": on, and can't be removed ("Enabled by your organisation")
 //   - "enabled": on, and can be removed ("Added by your organisation")
@@ -131,7 +144,7 @@ func first(list []string) string {
 	return list[0]
 }
 
-// DELETE /api/me/apps/{clientID}: remove an app. Apps the organisation has
+// DELETE /v1/me/apps/{clientID}: remove an app. Apps the organisation has
 // forced can't be removed.
 func (a *API) revokeApp(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
@@ -159,7 +172,7 @@ func (a *API) revokeApp(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// GET /api/me/sessions: where this account is signed in.
+// GET /v1/me/sessions: where this account is signed in.
 func (a *API) sessions(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	list, err := a.store.SessionsForUser(r.Context(), cur.user.ID)
@@ -178,12 +191,12 @@ func (a *API) sessions(w http.ResponseWriter, r *http.Request) {
 	out := make([]sessionView, 0, len(list))
 	for _, s := range list {
 		out = append(out, sessionView{ID: s.ID, UserAgent: s.UserAgent, IP: s.IP, CreatedAt: s.CreatedAt,
-			LastSeenAt: s.LastSeenAt, Current: s.ID == cur.session.ID})
+			LastSeenAt: s.LastSeenAt, Current: s.ID == cur.sessionID()})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// DELETE /api/me/sessions/{sessionID}: sign out another device.
+// DELETE /v1/me/sessions/{sessionID}: sign out another device.
 func (a *API) signOutDevice(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	id := chi.URLParam(r, "sessionID")
@@ -195,7 +208,7 @@ func (a *API) signOutDevice(w http.ResponseWriter, r *http.Request) {
 	for _, s := range list {
 		if s.ID == id {
 			// Signs that device out of Keston ID and of the apps it signed in to.
-			if id == cur.session.ID {
+			if id == cur.sessionID() && cur.token != "" {
 				a.EndBrowserSession(w, r)
 			} else {
 				a.end(r.Context(), id)
@@ -207,7 +220,7 @@ func (a *API) signOutDevice(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "not_found", "That session has already ended.")
 }
 
-// POST /api/me/password. Signs out every other device.
+// POST /v1/me/password. Signs out every other device.
 func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Current string `json:"current"`
@@ -249,14 +262,14 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, s := range others {
-		if s.ID != cur.session.ID {
+		if s.ID != cur.sessionID() {
 			a.end(ctx, s.ID)
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/me/mfa/setup: a new authenticator secret, not yet on.
+// POST /v1/me/mfa/setup: a new authenticator secret, not yet on.
 func (a *API) mfaSetup(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	// A new secret would replace the one in use: turn it off first.
@@ -287,7 +300,7 @@ func (a *API) mfaSetup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /api/me/mfa/enable: confirm with a code, get backup codes.
+// POST /v1/me/mfa/enable: confirm with a code, get backup codes.
 func (a *API) mfaEnable(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Code string `json:"code"`
@@ -322,7 +335,7 @@ func (a *API) mfaEnable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"backupCodes": codes})
 }
 
-// POST /api/me/mfa/disable: needs the password.
+// POST /v1/me/mfa/disable: needs the password.
 func (a *API) mfaDisable(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Password string `json:"password"`
@@ -370,7 +383,7 @@ func username(email string) string {
 	return name
 }
 
-// PATCH /api/me {name?, username?}: only the fields the organisation allows.
+// PATCH /v1/me {name?, username?}: only the fields the organisation allows.
 func (a *API) updateProfile(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name     *string `json:"name"`
@@ -424,7 +437,7 @@ func (a *API) updateProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.viewUser(user))
 }
 
-// PUT /api/me/picture (the image as the body): if the organisation allows.
+// PUT /v1/me/picture (the image as the body): if the organisation allows.
 func (a *API) setPicture(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	org, err := a.store.OrganisationByID(r.Context(), cur.user.OrganisationID)

@@ -21,6 +21,7 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/thekestongroup/id/internal/db"
+	"github.com/thekestongroup/id/internal/principal"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 )
@@ -63,14 +64,14 @@ func TestAdminPasskeys(t *testing.T) {
 	addKey("Phone")
 	addKey("YubiKey")
 
-	a := New(st, nil, "http://id.keston.localhost:4444")
+	a := New(st, "http://id.keston.localhost:4444")
 	call := func(h http.HandlerFunc, method string) (int, map[string]any) {
 		req := httptest.NewRequest(method, "/", nil)
 		rc := chi.NewRouteContext()
 		rc.URLParams.Add("userID", user.ID)
 		c := context.WithValue(req.Context(), chi.RouteCtxKey, rc)
-		c = context.WithValue(c, userKey, admin)
-		c = context.WithValue(c, permsKey, store.Perms{store.PermViewUsers: true, store.PermResetMFA: true})
+		c = principal.With(c, &principal.Caller{User: admin,
+			Perms: store.Perms{store.PermViewUsers: true, store.PermResetMFA: true}})
 		c = context.WithValue(c, orgKey, org)
 		w := httptest.NewRecorder()
 		h(w, req.WithContext(c))
@@ -86,8 +87,7 @@ func TestAdminPasskeys(t *testing.T) {
 	}
 	// So does the list.
 	req := httptest.NewRequest("GET", "/", nil)
-	c := context.WithValue(req.Context(), userKey, admin)
-	c = context.WithValue(c, permsKey, store.Perms{store.PermViewUsers: true})
+	c := principal.With(req.Context(), &principal.Caller{User: admin, Perms: store.Perms{store.PermViewUsers: true}})
 	c = context.WithValue(c, orgKey, org)
 	w := httptest.NewRecorder()
 	a.listUsers(w, req.WithContext(c))

@@ -64,11 +64,11 @@ func (a *API) passkeyRoutes(r chi.Router) {
 }
 
 func (a *API) passkeyAccountRoutes(r chi.Router) {
-	r.Get("/me/passkeys", a.listPasskeys)
-	r.Post("/me/passkeys/options", a.passkeyRegisterOptions)
-	r.Post("/me/passkeys", a.addPasskey)
-	r.Patch("/me/passkeys/{passkeyID}", a.renamePasskey)
-	r.Delete("/me/passkeys/{passkeyID}", a.removePasskey)
+	r.Get("/passkeys", a.listPasskeys)
+	r.Post("/passkeys/options", a.passkeyRegisterOptions)
+	r.Post("/passkeys", a.addPasskey)
+	r.Patch("/passkeys/{passkeyID}", a.renamePasskey)
+	r.Delete("/passkeys/{passkeyID}", a.removePasskey)
 }
 
 // waUser is a Keston account as go-webauthn sees it. Its user handle is the
@@ -362,7 +362,7 @@ func viewPasskey(p *store.Passkey) passkeyView {
 		Synced: p.Credential.Flags.BackupEligible}
 }
 
-// GET /api/me/passkeys
+// GET /v1/me/passkeys
 func (a *API) listPasskeys(w http.ResponseWriter, r *http.Request) {
 	keys, err := a.store.PasskeysForUser(r.Context(), from(r).user.ID)
 	if err != nil {
@@ -376,7 +376,7 @@ func (a *API) listPasskeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// POST /api/me/passkeys/options {password?}: starts adding a passkey. Needs
+// POST /v1/me/passkeys/options {password?}: starts adding a passkey. Needs
 // a sign-in in the last 10 minutes, or the password again.
 func (a *API) passkeyRegisterOptions(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -387,7 +387,8 @@ func (a *API) passkeyRegisterOptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cur := from(r)
-	if time.Since(cur.session.AuthTime) > recentSignIn {
+	// An access token without a session counts as not recent.
+	if cur.session == nil || time.Since(cur.session.AuthTime) > recentSignIn {
 		if body.Password == "" {
 			writeError(w, http.StatusForbidden, "reauthenticate", "Enter your password to add a passkey.")
 			return
@@ -429,7 +430,7 @@ func passkeyName(s string) (string, bool) {
 	return s, s != "" && utf8.RuneCountInString(s) <= maxPasskeyName
 }
 
-// POST /api/me/passkeys {ceremony, credential, name}
+// POST /v1/me/passkeys {ceremony, credential, name}
 func (a *API) addPasskey(w http.ResponseWriter, r *http.Request) {
 	var body ceremonyBody
 	if !decode(w, r, &body) {
@@ -478,7 +479,7 @@ func (a *API) addPasskey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, viewPasskey(key))
 }
 
-// PATCH /api/me/passkeys/{id} {name}
+// PATCH /v1/me/passkeys/{id} {name}
 func (a *API) renamePasskey(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
@@ -503,7 +504,7 @@ func (a *API) renamePasskey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, viewPasskey(key))
 }
 
-// DELETE /api/me/passkeys/{id}
+// DELETE /v1/me/passkeys/{id}
 func (a *API) removePasskey(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	err := a.store.DeletePasskey(r.Context(), cur.user.ID, chi.URLParam(r, "passkeyID"))

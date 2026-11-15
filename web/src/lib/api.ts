@@ -128,10 +128,15 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Calls Keston ID: the sign-in flow at /api (before you're signed in), and
+ * Keston ID's API at /v1 (the same one Keston Admin and apps use), here with
+ * the session cookie. path is absolute.
+ */
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response
   try {
-    res = await fetch(`/api${path}`, {
+    res = await fetch(path, {
       method,
       credentials: 'same-origin',
       headers: method === 'GET' ? {} : { 'Content-Type': 'application/json', 'X-Keston-ID': '1' },
@@ -150,25 +155,25 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const api = {
   flow: (authRequestID?: string) =>
-    request<Flow>('GET', `/flow${authRequestID ? `?authRequestID=${encodeURIComponent(authRequestID)}` : ''}`),
+    request<Flow>('GET', `/api/flow${authRequestID ? `?authRequestID=${encodeURIComponent(authRequestID)}` : ''}`),
   signIn: (email: string, password: string, authRequestID?: string) =>
-    request<Flow>('POST', '/sign-in', { email, password, authRequestID }),
+    request<Flow>('POST', '/api/sign-in', { email, password, authRequestID }),
   mfa: (code: string, kind: 'app' | 'backup', authRequestID?: string) =>
-    request<Flow>('POST', '/mfa', { code, kind, authRequestID }),
+    request<Flow>('POST', '/api/mfa', { code, kind, authRequestID }),
   consent: (authRequestID: string, scopes: string[]) =>
-    request<Flow>('POST', '/consent', { authRequestID, scopes }),
+    request<Flow>('POST', '/api/consent', { authRequestID, scopes }),
   /** Signs the active account (or every account) out of Keston ID and its apps. */
-  signOut: (all = false) => request<{ remaining: number }>('POST', '/sign-out', { all }),
-  accounts: () => request<SignedInAccount[]>('GET', '/accounts'),
+  signOut: (all = false) => request<{ remaining: number }>('POST', '/api/sign-out', { all }),
+  accounts: () => request<SignedInAccount[]>('GET', '/api/accounts'),
   switchAccount: (id: string, authRequestID?: string) =>
-    request<Flow>('POST', '/accounts/switch', { id, authRequestID }),
+    request<Flow>('POST', '/api/accounts/switch', { id, authRequestID }),
 
-  me: () => request<Me>('GET', '/me'),
-  updateProfile: (changes: { name?: string; username?: string }) => request<UserView>('PATCH', '/me', changes),
-  removePicture: () => request<void>('DELETE', '/me/picture', {}),
+  me: () => request<Me>('GET', '/v1/me'),
+  updateProfile: (changes: { name?: string; username?: string }) => request<UserView>('PATCH', '/v1/me', changes),
+  removePicture: () => request<void>('DELETE', '/v1/me/picture', {}),
   /** Uploads a profile picture (PNG, JPEG or GIF, under 2 MB). */
   setPicture: async (file: File): Promise<UserView> => {
-    const res = await fetch('/api/me/picture', {
+    const res = await fetch('/v1/me/picture', {
       method: 'PUT',
       credentials: 'same-origin',
       headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Keston-ID': '1' },
@@ -180,30 +185,30 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, data.error ?? 'error', data.message ?? 'Something went wrong.', data.field)
     return data as UserView
   },
-  apps: () => request<ConnectedApp[]>('GET', '/me/apps'),
-  revokeApp: (clientId: string) => request<void>('DELETE', `/me/apps/${encodeURIComponent(clientId)}`, {}),
-  sessions: () => request<SessionInfo[]>('GET', '/me/sessions'),
-  endSession: (id: string) => request<void>('DELETE', `/me/sessions/${encodeURIComponent(id)}`, {}),
-  changePassword: (current: string, next: string) => request<void>('POST', '/me/password', { current, new: next }),
+  apps: () => request<ConnectedApp[]>('GET', '/v1/me/apps'),
+  revokeApp: (clientId: string) => request<void>('DELETE', `/v1/me/apps/${encodeURIComponent(clientId)}`, {}),
+  sessions: () => request<SessionInfo[]>('GET', '/v1/me/sessions'),
+  endSession: (id: string) => request<void>('DELETE', `/v1/me/sessions/${encodeURIComponent(id)}`, {}),
+  changePassword: (current: string, next: string) => request<void>('POST', '/v1/me/password', { current, new: next }),
   /** A new authenticator secret (not on until confirmed), with its QR code as a data URI. */
   mfaSetup: () =>
-    request<{ secret: string; otpauthUrl: string; qrCode: string }>('POST', '/me/mfa/setup', {}),
-  mfaEnable: (code: string) => request<{ backupCodes: string[] }>('POST', '/me/mfa/enable', { code }),
-  mfaDisable: (password: string) => request<void>('POST', '/me/mfa/disable', { password }),
+    request<{ secret: string; otpauthUrl: string; qrCode: string }>('POST', '/v1/me/mfa/setup', {}),
+  mfaEnable: (code: string) => request<{ backupCodes: string[] }>('POST', '/v1/me/mfa/enable', { code }),
+  mfaDisable: (password: string) => request<void>('POST', '/v1/me/mfa/disable', { password }),
 
   // Passkeys and security keys (see passkeys.ts for the browser side).
-  signInPasskeyOptions: () => request<PasskeyCeremony>('POST', '/sign-in/passkey/options', {}),
+  signInPasskeyOptions: () => request<PasskeyCeremony>('POST', '/api/sign-in/passkey/options', {}),
   signInPasskey: (ceremony: string, credential: unknown, authRequestID?: string) =>
-    request<Flow>('POST', '/sign-in/passkey', { ceremony, credential, authRequestID }),
-  mfaPasskeyOptions: () => request<PasskeyCeremony>('POST', '/mfa/passkey/options', {}),
+    request<Flow>('POST', '/api/sign-in/passkey', { ceremony, credential, authRequestID }),
+  mfaPasskeyOptions: () => request<PasskeyCeremony>('POST', '/api/mfa/passkey/options', {}),
   mfaPasskey: (ceremony: string, credential: unknown, authRequestID?: string) =>
-    request<Flow>('POST', '/mfa/passkey', { ceremony, credential, authRequestID }),
-  passkeys: () => request<Passkey[]>('GET', '/me/passkeys'),
+    request<Flow>('POST', '/api/mfa/passkey', { ceremony, credential, authRequestID }),
+  passkeys: () => request<Passkey[]>('GET', '/v1/me/passkeys'),
   /** Starts adding one. Without a recent sign-in, needs the password (error code "reauthenticate"). */
-  passkeyOptions: (password?: string) => request<PasskeyCeremony>('POST', '/me/passkeys/options', { password }),
+  passkeyOptions: (password?: string) => request<PasskeyCeremony>('POST', '/v1/me/passkeys/options', { password }),
   addPasskey: (ceremony: string, name: string, credential: unknown) =>
-    request<Passkey>('POST', '/me/passkeys', { ceremony, name, credential }),
+    request<Passkey>('POST', '/v1/me/passkeys', { ceremony, name, credential }),
   renamePasskey: (id: string, name: string) =>
-    request<Passkey>('PATCH', `/me/passkeys/${encodeURIComponent(id)}`, { name }),
-  removePasskey: (id: string) => request<void>('DELETE', `/me/passkeys/${encodeURIComponent(id)}`, {}),
+    request<Passkey>('PATCH', `/v1/me/passkeys/${encodeURIComponent(id)}`, { name }),
+  removePasskey: (id: string) => request<void>('DELETE', `/v1/me/passkeys/${encodeURIComponent(id)}`, {}),
 }
