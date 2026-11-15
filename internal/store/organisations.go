@@ -219,10 +219,6 @@ func (s *Store) DeleteDueOrganisations(ctx context.Context) ([]string, error) {
 	return names, tx.Commit(ctx)
 }
 
-// UsernameFormats: how a new user's username can be suggested from their
-// name, e.g. first.last gives jo.bloggs for Jo Bloggs.
-var UsernameFormats = []string{"first.last", "firstlast", "f.last", "flast", "first.l", "last.first"}
-
 func (s *Store) SetUsernameFormat(ctx context.Context, orgID, format string) error {
 	_, err := s.DB.Exec(ctx, `UPDATE organisations SET username_format = $2, updated_at = now() WHERE id = $1`,
 		orgID, format)

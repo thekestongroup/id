@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -926,9 +925,12 @@ func (a *API) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	org := organisation(r)
-	if body.UsernameFormat != nil && !slices.Contains(store.UsernameFormats, *body.UsernameFormat) {
-		writeFieldError(w, "usernameFormat", "Choose a username format")
-		return
+	if body.UsernameFormat != nil {
+		*body.UsernameFormat = strings.TrimSpace(*body.UsernameFormat)
+		if msg := store.CheckUsernameFormula(*body.UsernameFormat); msg != "" {
+			writeFieldError(w, "usernameFormat", msg)
+			return
+		}
 	}
 	changes := []string{}
 	editing := org.ProfileEditing
