@@ -12,14 +12,13 @@ import (
 )
 
 // Adding a user with a password Keston ID makes up: it meets the policy, is
-// returned once, works, and must be changed at first sign-in, whatever the
-// request says.
+// returned once and works. Changing it at first sign-in is the admin's call,
+// as for a typed one.
 func TestCreateUserGeneratedPassword(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	code, raw := e.do(e.admin(), http.MethodPost, "/users", map[string]any{
-		"name": "Gen Erated", "username": "gen", "generatePassword": true, "password": "ignored",
-		"requirePasswordChange": false})
+		"name": "Gen Erated", "username": "gen", "generatePassword": true, "password": "ignored"})
 	if code != http.StatusCreated {
 		t.Fatalf("create: %d %s", code, raw)
 	}
@@ -45,7 +44,19 @@ func TestCreateUserGeneratedPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !st.PasswordChangeRequired {
-		t.Error("a generated password should be changed at first sign-in")
+		t.Error("requirePasswordChange left out should default to on")
+	}
+
+	code, raw = e.do(e.admin(), http.MethodPost, "/users", map[string]any{
+		"name": "Gen Kept", "username": "genkept", "generatePassword": true, "requirePasswordChange": false})
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, raw)
+	}
+	var kept struct{ ID string }
+	_ = json.Unmarshal(raw, &kept)
+	ku, _ := e.st.UserByID(ctx, kept.ID)
+	if st, _ := e.st.SignInState(ctx, ku); st.PasswordChangeRequired {
+		t.Error("requirePasswordChange: false should be respected for a generated password")
 	}
 
 	// Typed by the admin: not returned, and the change is up to them.

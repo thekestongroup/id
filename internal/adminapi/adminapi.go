@@ -485,8 +485,7 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 		Role     string `json:"role"`
 		// Keston ID makes up a password meeting the policy (Password is
-		// ignored), returned once in the response. They always choose their
-		// own at first sign-in.
+		// ignored), returned once in the response.
 		GeneratePassword bool `json:"generatePassword"`
 		// They choose their own password when they first sign in (default on).
 		RequirePasswordChange *bool `json:"requirePasswordChange"`
@@ -513,7 +512,6 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.GeneratePassword {
 		body.Password = org.PasswordPolicy.Generate(user)
-		body.RequirePasswordChange = nil // on
 	} else if failed := org.PasswordPolicy.Check(body.Password, user); len(failed) > 0 {
 		writeFieldError(w, "password", policy.Message(failed))
 		return
