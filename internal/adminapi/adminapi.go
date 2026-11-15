@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -886,28 +887,53 @@ func (a *API) removeUserPicture(w http.ResponseWriter, r *http.Request) {
 // ── Organisation settings ────────────────────────────────────────────────
 
 func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"profileEditing": organisation(r).ProfileEditing})
+	org := organisation(r)
+	writeJSON(w, http.StatusOK, map[string]any{"profileEditing": org.ProfileEditing, "usernameFormat": org.UsernameFormat})
 }
 
-// PUT …/settings {profileEditing}: which profile fields people may change.
+// PUT …/settings {profileEditing?, usernameFormat?}: which profile fields
+// people may change, and how new users' usernames are suggested.
 func (a *API) putSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ProfileEditing store.ProfileEditing `json:"profileEditing"`
+		ProfileEditing *store.ProfileEditing `json:"profileEditing"`
+		UsernameFormat *string               `json:"usernameFormat"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	if err := a.store.SetProfileEditing(r.Context(), organisation(r).ID, body.ProfileEditing); err != nil {
-		serverError(w, r, err)
+	org := organisation(r)
+	if body.UsernameFormat != nil && !slices.Contains(store.UsernameFormats, *body.UsernameFormat) {
+		writeFieldError(w, "usernameFormat", "Choose a username format")
 		return
 	}
-	slog.Info("organisation settings changed", "organisation", organisation(r).ID, "by", caller(r).ID)
-	old := organisation(r).ProfileEditing
-	a.audit(r, store.ActionSettings, aboutOrg(organisation(r)), summary(
-		change("Change their name", onOff(old.Name), onOff(body.ProfileEditing.Name)),
-		change("Change their email", onOff(old.Email), onOff(body.ProfileEditing.Email)),
-		change("Change their picture", onOff(old.Picture), onOff(body.ProfileEditing.Picture))))
-	writeJSON(w, http.StatusOK, map[string]any{"profileEditing": body.ProfileEditing})
+	changes := []string{}
+	editing := org.ProfileEditing
+	if body.ProfileEditing != nil {
+		if err := a.store.SetProfileEditing(r.Context(), org.ID, *body.ProfileEditing); err != nil {
+			serverError(w, r, err)
+			return
+		}
+		old := org.ProfileEditing
+		editing = *body.ProfileEditing
+		changes = append(changes,
+			change("Change their name", onOff(old.Name), onOff(editing.Name)),
+			change("Change their email", onOff(old.Email), onOff(editing.Email)),
+			change("Change their picture", onOff(old.Picture), onOff(editing.Picture)))
+	}
+	format := org.UsernameFormat
+	if body.UsernameFormat != nil {
+		if err := a.store.SetUsernameFormat(r.Context(), org.ID, *body.UsernameFormat); err != nil {
+			serverError(w, r, err)
+			return
+		}
+		changes = append(changes, change("Username format", format, *body.UsernameFormat))
+		format = *body.UsernameFormat
+	}
+	slog.Info("organisation settings changed", "organisation", org.ID, "by", caller(r).ID)
+	if s := summary(changes...); s != "" {
+		a.audit(r, store.ActionSettings, aboutOrg(org), s)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"profileEditing": editing, "usernameFormat": format})
 }
 
 // decodeOptional reads a JSON body if there is one.

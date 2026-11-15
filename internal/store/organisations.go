@@ -16,8 +16,10 @@ type Organisation struct {
 	Domain         string         `json:"domain"`
 	PasswordPolicy policy.Policy  `json:"passwordPolicy"`
 	ProfileEditing ProfileEditing `json:"profileEditing"`
-	UserCount      int            `json:"userCount"`
-	CreatedAt      time.Time      `json:"createdAt"`
+	// How new users' usernames are suggested from their names (UsernameFormats).
+	UsernameFormat string    `json:"usernameFormat"`
+	UserCount      int       `json:"userCount"`
+	CreatedAt      time.Time `json:"createdAt"`
 	// The Keston Group's own organisation: can't be deleted.
 	IsPlatform bool `json:"isPlatform"`
 	// Deletion scheduled: it goes at DeleteAfter unless a global admin signs
@@ -29,13 +31,13 @@ type Organisation struct {
 const orgColumns = `id, name, domain, password_policy, profile_editing,
 	(SELECT count(*) FROM users u WHERE u.organisation_id = organisations.id AND u.support_for IS NULL
 		AND u.status <> 'deleted'), created_at,
-	is_platform, deletion_requested_at, delete_after`
+	is_platform, deletion_requested_at, delete_after, username_format`
 
 func scanOrganisation(row pgx.Row) (*Organisation, error) {
 	var o Organisation
 	var raw, editing []byte
 	if err := row.Scan(&o.ID, &o.Name, &o.Domain, &raw, &editing, &o.UserCount, &o.CreatedAt, &o.IsPlatform,
-		&o.DeletionRequestedAt, &o.DeleteAfter); err != nil {
+		&o.DeletionRequestedAt, &o.DeleteAfter, &o.UsernameFormat); err != nil {
 		return nil, notFound(err)
 	}
 	if err := json.Unmarshal(raw, &o.PasswordPolicy); err != nil {
@@ -215,4 +217,14 @@ func (s *Store) DeleteDueOrganisations(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return names, tx.Commit(ctx)
+}
+
+// UsernameFormats: how a new user's username can be suggested from their
+// name, e.g. first.last gives jo.bloggs for Jo Bloggs.
+var UsernameFormats = []string{"first.last", "firstlast", "f.last", "flast", "first.l", "last.first"}
+
+func (s *Store) SetUsernameFormat(ctx context.Context, orgID, format string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE organisations SET username_format = $2, updated_at = now() WHERE id = $1`,
+		orgID, format)
+	return err
 }
