@@ -95,6 +95,8 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 	}
 	// Turned off for them by their organisation (Keston Admin → Apps).
 	if eff, err := a.store.EffectiveApps(ctx, cur.user); err == nil && eff[client.ID] == store.AppDisabled {
+		a.logSignIn(r, store.SignIn{User: cur.user, Method: store.SignInApp, ClientID: client.ID,
+			Reason: store.ReasonAppDisabled})
 		return nil, http.StatusForbidden, cur.user.Organisation + " has turned off " + client.Name +
 			" for your account. Ask one of its admins if you need it."
 	}
@@ -117,6 +119,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		if err := a.store.CompleteAuthRequest(ctx, ar.ID, cur.session, granted); err != nil {
 			return nil, http.StatusInternalServerError, "Something went wrong. Try again."
 		}
+		a.logSignIn(r, store.SignIn{User: cur.user, Method: store.SignInApp, ClientID: client.ID, Success: true})
 		res.Step, res.Redirect = "redirect", a.callbackURL(ar.ID)
 		return res, 0, ""
 	}
@@ -189,10 +192,14 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		secret.DummyCheck(body.Password)
+		a.logSignIn(r, store.SignIn{Email: body.Email, Method: store.SignInPassword, AuthRequestID: body.AuthRequestID,
+			Reason: store.ReasonUnknownUser})
 		writeFieldError(w, "password", "Incorrect email or password")
 		return
 	}
 	if user.LockedUntil != nil && user.LockedUntil.After(time.Now()) {
+		a.logSignIn(r, store.SignIn{User: user, Method: store.SignInPassword, AuthRequestID: body.AuthRequestID,
+			Reason: store.ReasonLocked})
 		writeError(w, http.StatusTooManyRequests, "locked",
 			"Too many attempts. Wait 15 minutes, or reset your password.")
 		return
@@ -201,6 +208,8 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 	// from their own account (see SupportSignIn).
 	if user.IsSupport() {
 		secret.DummyCheck(body.Password)
+		a.logSignIn(r, store.SignIn{User: user, Method: store.SignInPassword, AuthRequestID: body.AuthRequestID,
+			Reason: store.ReasonSupportAccount})
 		writeFieldError(w, "password", "Incorrect email or password")
 		return
 	}
@@ -211,10 +220,18 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok || !user.Usable() {
 		_ = a.store.RecordLogin(ctx, user.ID, false)
+		why := store.ReasonWrongPassword
+		if ok {
+			why = failReason(user)
+		}
+		a.logSignIn(r, store.SignIn{User: user, Method: store.SignInPassword, AuthRequestID: body.AuthRequestID,
+			Reason: why})
 		writeFieldError(w, "password", "Incorrect email or password")
 		return
 	}
 	_ = a.store.RecordLogin(ctx, user.ID, true)
+	a.logSignIn(r, store.SignIn{User: user, Method: store.SignInPassword, AuthRequestID: body.AuthRequestID,
+		Success: true})
 
 	stage := "verified"
 	if user.TOTPEnabled {
@@ -253,7 +270,13 @@ func (a *API) mfa(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	logMethod := store.SignInMFA
+	if body.Kind == "backup" {
+		logMethod = store.SignInBackupCode
+	}
 	if cur.user.LockedUntil != nil && cur.user.LockedUntil.After(time.Now()) {
+		a.logSignIn(r, store.SignIn{User: cur.user, Method: logMethod, AuthRequestID: body.AuthRequestID,
+			Reason: store.ReasonLocked})
 		writeError(w, http.StatusTooManyRequests, "locked", "Too many attempts. Wait 15 minutes and try again.")
 		return
 	}
@@ -278,6 +301,8 @@ func (a *API) mfa(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		_ = a.store.RecordLogin(ctx, cur.user.ID, false)
+		a.logSignIn(r, store.SignIn{User: cur.user, Method: logMethod, AuthRequestID: body.AuthRequestID,
+			Reason: store.ReasonMFAFailed})
 		field := "code"
 		msg := "That code didn't work. Check it and try again."
 		if body.Kind == "backup" {
@@ -287,6 +312,7 @@ func (a *API) mfa(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.store.RecordLogin(ctx, cur.user.ID, true)
+	a.logSignIn(r, store.SignIn{User: cur.user, Method: logMethod, AuthRequestID: body.AuthRequestID, Success: true})
 	sess, err := a.store.VerifySession(ctx, cur.session.ID, method)
 	if err != nil {
 		serverError(w, r, err)
@@ -340,6 +366,7 @@ func (a *API) consent(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	a.logSignIn(r, store.SignIn{User: cur.user, Method: store.SignInApp, ClientID: client.ID, Success: true})
 	writeJSON(w, http.StatusOK, flowResponse{Step: "redirect", Redirect: a.callbackURL(ar.ID)})
 }
 

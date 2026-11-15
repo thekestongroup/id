@@ -97,6 +97,9 @@ func (a *API) signUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("organisation signed up", "organisation", org.ID, "domain", domain, "ip", clientIP(r))
+	a.store.Audit(r.Context(), store.AuditEntry{OrganisationID: org.ID, Actor: admin,
+		Action: store.ActionOrganisationCreated, TargetType: store.TargetOrganisation, TargetID: org.ID,
+		TargetName: org.Name, Summary: "Signed up", IP: clientIP(r)})
 	writeJSON(w, http.StatusCreated, map[string]any{"organisation": org, "admin": a.userView(admin)})
 }
 

@@ -108,6 +108,8 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermSettings)).Put("/settings", a.putSettings)
 		r.With(a.need(store.PermPolicy)).Get("/password-policy", a.getPolicy)
 		r.With(a.need(store.PermPolicy)).Put("/password-policy", a.putPolicy)
+		r.With(a.need(store.PermReports)).Get("/audit-log", a.auditLog)
+		r.With(a.need(store.PermReports)).Get("/sign-ins", a.signIns)
 	})
 
 	return r
@@ -432,6 +434,7 @@ func (a *API) createOrganisation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("organisation created", "organisation", org.ID, "domain", domain, "by", caller(r).ID)
+	a.auditIn(r, org.ID, store.ActionOrganisationCreated, aboutOrg(org), "Global admin: "+admin.Email)
 	writeJSON(w, http.StatusCreated, map[string]any{"organisation": org, "admin": a.userView(admin)})
 }
 
@@ -546,6 +549,7 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("account created", "user", created.ID, "organisation", org.ID, "by", caller(r).ID)
+	a.audit(r, store.ActionUserCreated, aboutUser(created), "Role: "+roleLabel(created.Role))
 	writeJSON(w, http.StatusCreated, a.userView(created))
 }
 
@@ -599,6 +603,7 @@ func (a *API) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("password reset", "user", u.ID, "by", caller(r).ID)
+	a.audit(r, store.ActionUserPasswordReset, aboutUser(u), "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -627,6 +632,11 @@ func (a *API) setStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("account status changed", "user", u.ID, "status", body.Status, "by", caller(r).ID)
+	action := store.ActionUserEnabled
+	if body.Status == "disabled" {
+		action = store.ActionUserDisabled
+	}
+	a.audit(r, action, aboutUser(u), change("Status", statusLabel(u.Status), statusLabel(body.Status)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -644,11 +654,13 @@ func (a *API) putPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p = p.Normalise()
+	before := organisation(r).PasswordPolicy
 	if err := a.store.SetPasswordPolicy(r.Context(), organisation(r).ID, p); err != nil {
 		serverError(w, r, err)
 		return
 	}
 	slog.Info("password policy changed", "organisation", organisation(r).ID, "by", caller(r).ID)
+	a.audit(r, store.ActionPasswordPolicy, aboutOrg(organisation(r)), policyChanges(before, p))
 	writeJSON(w, http.StatusOK, map[string]any{"policy": p, "rules": p.Rules(),
 		"baselineMinLength": policy.BaselineMinLength})
 }
@@ -789,6 +801,14 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("account updated", "user", u.ID, "by", caller(r).ID)
+	roleAfter := u.Role
+	if body.Role != nil {
+		roleAfter = *body.Role
+	}
+	if s := summary(change("Name", u.Name, updated.Name), change("Email", u.Email, updated.Email),
+		change("Role", roleLabel(u.Role), roleLabel(roleAfter))); s != "" {
+		a.audit(r, store.ActionUserUpdated, aboutUser(updated), s)
+	}
 	writeJSON(w, http.StatusOK, a.userView(updated))
 }
 
@@ -811,6 +831,7 @@ func (a *API) setUserPicture(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	a.audit(r, store.ActionUserPictureChanged, aboutUser(u), "")
 	updated, _ := a.store.UserByID(r.Context(), u.ID)
 	writeJSON(w, http.StatusOK, a.userView(updated))
 }
@@ -824,6 +845,7 @@ func (a *API) removeUserPicture(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	a.audit(r, store.ActionUserPictureRemoved, aboutUser(u), "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -846,6 +868,11 @@ func (a *API) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("organisation settings changed", "organisation", organisation(r).ID, "by", caller(r).ID)
+	old := organisation(r).ProfileEditing
+	a.audit(r, store.ActionSettings, aboutOrg(organisation(r)), summary(
+		change("Change their name", onOff(old.Name), onOff(body.ProfileEditing.Name)),
+		change("Change their email", onOff(old.Email), onOff(body.ProfileEditing.Email)),
+		change("Change their picture", onOff(old.Picture), onOff(body.ProfileEditing.Picture))))
 	writeJSON(w, http.StatusOK, map[string]any{"profileEditing": body.ProfileEditing})
 }
 
@@ -874,6 +901,7 @@ func (a *API) disableMFA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("mfa turned off by an admin", "user", u.ID, "organisation", organisation(r).ID, "by", caller(r).ID)
+	a.audit(r, store.ActionUserMFADisabled, aboutUser(u), "")
 	updated, _ := a.store.UserByID(r.Context(), u.ID)
 	writeJSON(w, http.StatusOK, a.userView(updated))
 }

@@ -106,6 +106,7 @@ func (a *API) requestSupport(w http.ResponseWriter, r *http.Request) {
 		u.Name+" from Keston support asked for access to "+org.Name+": “"+text+"”. Allow it in Keston Admin, and end it whenever you like.",
 		orgLink(org))
 	slog.Info("support access requested", "organisation", org.ID, "request", id, "by", u.ID)
+	a.audit(r, store.ActionSupportRequested, aboutOrg(org), "Reason: "+text)
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -144,6 +145,11 @@ func (a *API) decideSupport(w http.ResponseWriter, r *http.Request) {
 	a.notifyAdmins(r.Context(), org, "info", "Keston support access "+verb, u.Name+" "+verb+" Keston support access.",
 		orgLink(org))
 	slog.Info("support access decided", "organisation", org.ID, "approved", approve, "by", u.ID)
+	if approve {
+		a.audit(r, store.ActionSupportAllowed, aboutOrg(org), fmt.Sprintf("For %d days", days))
+	} else {
+		a.audit(r, store.ActionSupportDeclined, aboutOrg(org), "")
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -160,6 +166,7 @@ func (a *API) revokeSupport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("support access revoked", "organisation", org.ID, "by", u.ID)
+	a.audit(r, store.ActionSupportEnded, aboutOrg(org), "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -194,6 +201,7 @@ func (a *API) startLockout(w http.ResponseWriter, r *http.Request) {
 			l.EffectiveAt.Format("15:04 on 2 January 2006 (MST)")),
 		orgLink(org))
 	slog.Info("lockout procedure started", "organisation", org.ID, "lockout", l.ID, "by", u.ID)
+	a.audit(r, store.ActionLockoutStarted, aboutOrg(org), "Reason: "+text)
 	writeJSON(w, http.StatusCreated, l)
 }
 
@@ -223,12 +231,20 @@ func (a *API) decideLockout(w http.ResponseWriter, r *http.Request) {
 	a.notifyAdmins(r.Context(), org, "info", "Organisation lockout request "+status,
 		u.Name+" "+status+" the lockout request. Keston support won't be given access by it.", orgLink(org))
 	slog.Info("lockout procedure decided", "organisation", org.ID, "status", status, "by", u.ID)
+	action := store.ActionLockoutDenied
+	if decision == "cancel" {
+		action = store.ActionLockoutCancelled
+	}
+	a.audit(r, action, aboutOrg(org), "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // Housekeeping finishes lockout requests nobody denied, and says so. Run
 // regularly (every replica may; each request completes once).
 func (a *API) Housekeeping(ctx context.Context) {
+	if err := a.store.DeleteOldLogs(ctx); err != nil {
+		slog.Warn("log housekeeping", "error", err)
+	}
 	if err := a.store.DeleteExpiredSupportAccounts(ctx); err != nil {
 		slog.Warn("support account housekeeping", "error", err)
 	}
@@ -257,6 +273,9 @@ func (a *API) Housekeeping(ctx context.Context) {
 				"You have support access for 7 days.", orgLink(org))
 		}
 		slog.Info("lockout procedure completed", "organisation", org.ID, "lockout", d.ID)
+		a.store.Audit(ctx, store.AuditEntry{OrganisationID: org.ID, Action: store.ActionLockoutCompleted,
+			TargetType: store.TargetOrganisation, TargetID: org.ID, TargetName: org.Name,
+			Summary: "Nobody denied it: Keston support has access for 7 days"})
 	}
 }
 
@@ -321,6 +340,7 @@ func (a *API) openSupportAccount(w http.ResponseWriter, r *http.Request) {
 		Expires: time.Now().Add(HandoffTTL).Unix()})
 	token := base64.RawURLEncoding.EncodeToString(a.store.Box.Seal(raw))
 	slog.Info("support account opened", "organisation", org.ID, "support_user", sa.ID, "by", u.ID)
+	a.audit(r, store.ActionSupportOpened, aboutUser(sa), "")
 	writeJSON(w, http.StatusOK, map[string]string{"url": a.issuer + "/support-sign-in?token=" + token})
 }
 
@@ -358,6 +378,7 @@ func (a *API) scheduleDeletion(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("%s asked to delete %s. It and all its users will be deleted on %s, unless a global admin signs in before then.",
 			u.Name, org.Name, after.Format("2 January 2006")), orgLink(org))
 	slog.Info("organisation deletion scheduled", "organisation", org.ID, "after", after, "by", u.ID)
+	a.audit(r, store.ActionDeletionScheduled, aboutOrg(org), "Deleted on "+after.Format("2 January 2006"))
 	writeJSON(w, http.StatusOK, map[string]any{"deleteAfter": after})
 }
 
@@ -374,6 +395,7 @@ func (a *API) cancelDeletion(w http.ResponseWriter, r *http.Request) {
 	} else if ok {
 		a.notifyAdmins(r.Context(), org, "info", "Deletion cancelled", u.Name+" cancelled deleting "+org.Name+".",
 			orgLink(org))
+		a.audit(r, store.ActionDeletionCancelled, aboutOrg(org), "")
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
