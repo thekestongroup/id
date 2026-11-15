@@ -69,8 +69,24 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		version INT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
-	var current int
-	if err := conn.QueryRow(ctx, "SELECT coalesce(max(version), 0) FROM schema_migrations").Scan(&current); err != nil {
+	// Every migration not applied yet, not just ones above the highest:
+	// features built in parallel each take their own number, and may be
+	// merged (and deployed) in any order.
+	rows, err := conn.Query(ctx, "SELECT version FROM schema_migrations")
+	if err != nil {
+		return err
+	}
+	applied := map[int]bool{}
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			rows.Close()
+			return err
+		}
+		applied[v] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
 		return err
 	}
 
@@ -85,7 +101,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		if err != nil {
 			return fmt.Errorf("migration %s: name must start with a number", name)
 		}
-		if version <= current {
+		if applied[version] {
 			continue
 		}
 		sql, err := migrations.ReadFile(file)
