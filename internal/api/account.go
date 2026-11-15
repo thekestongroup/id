@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,20 +44,17 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/me/apps: every app on this account, and who put it there:
-//   - "builtin": Keston's own apps ("Enabled by your organisation")
-//   - "organisation": added by the organisation, "enabled" (can't remove)
-//     or "optional" (can remove)
-//   - "user": apps this person signed in to themselves (can remove)
+// GET /api/me/apps: the apps on this account, from what the organisation
+// sets (Keston Admin → Apps, by default and per group):
+//   - "forced": on, and can't be removed ("Enabled by your organisation")
+//   - "enabled": on, and can be removed ("Added by your organisation")
+//   - "user": apps this person signed in to themselves (can be removed)
+//
+// Disabled apps aren't shown.
 func (a *API) apps(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	ctx := r.Context()
-	builtin, err := a.store.BuiltinClients(ctx)
-	if err != nil {
-		serverError(w, r, err)
-		return
-	}
-	orgApps, err := a.store.OrganisationApps(ctx, cur.user.OrganisationID)
+	eff, err := a.store.EffectiveApps(ctx, cur.user)
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -75,20 +73,36 @@ func (a *API) apps(w http.ResponseWriter, r *http.Request) {
 	for _, g := range grants {
 		granted[g.ClientID] = g
 	}
-
 	type appView struct {
 		Client    clientView  `json:"client"`
-		Source    string      `json:"source"` // builtin, organisation, user
+		Source    string      `json:"source"` // forced, enabled, user
 		Removable bool        `json:"removable"`
 		Scopes    []ScopeInfo `json:"scopes"`
 		// When this person allowed it (nil: never signed in to it yet).
 		GrantedAt *time.Time `json:"grantedAt,omitempty"`
 	}
+	all, err := a.store.AllClients(ctx)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	out := []appView{}
-	seen := map[string]bool{}
-	add := func(c *store.Client, source string, removable bool) {
-		seen[c.ID] = true
-		v := appView{Client: viewClient(c, first(c.RedirectURIs)), Source: source, Removable: removable,
+	for i := range all {
+		c := &all[i]
+		mode, set := eff[c.ID]
+		_, signedIn := granted[c.ID]
+		source := "user"
+		switch {
+		case set && mode == store.AppDisabled:
+			continue
+		case set && mode == store.AppForced:
+			source = "forced"
+		case set && mode == store.AppEnabled && !removed[c.ID]:
+			source = "enabled"
+		case !signedIn:
+			continue
+		}
+		v := appView{Client: viewClient(c, first(c.RedirectURIs)), Source: source, Removable: source != "forced",
 			Scopes: []ScopeInfo{}}
 		if g, ok := granted[c.ID]; ok {
 			v.Scopes = describe(g.Scopes)
@@ -97,26 +111,8 @@ func (a *API) apps(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
-	for i := range builtin {
-		add(&builtin[i], "builtin", false)
-	}
-	for i := range orgApps {
-		c := orgApps[i].Client
-		if seen[c.ID] || (orgApps[i].Mode == "optional" && removed[c.ID]) {
-			continue
-		}
-		add(&c, "organisation", orgApps[i].Mode == "optional")
-	}
-	for _, g := range grants {
-		if seen[g.ClientID] {
-			continue
-		}
-		c, err := a.store.ClientByID(ctx, g.ClientID)
-		if err != nil {
-			continue
-		}
-		add(c, "user", true)
-	}
+	// The organisation's apps first, then the person's own.
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Source != "user" && out[j].Source == "user" })
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -127,43 +123,28 @@ func first(list []string) string {
 	return list[0]
 }
 
-// DELETE /api/me/apps/{clientID}: remove an app's access. Keston's own apps
-// and apps the organisation requires can't be removed.
+// DELETE /api/me/apps/{clientID}: remove an app. Apps the organisation has
+// forced can't be removed.
 func (a *API) revokeApp(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	ctx := r.Context()
 	id := chi.URLParam(r, "clientID")
-	c, err := a.store.ClientByID(ctx, id)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "That app doesn't exist.")
-		return
-	}
-	if c.Builtin {
-		writeError(w, http.StatusForbidden, "required", "Your organisation has enabled this app for everyone.")
-		return
-	}
-	orgApps, err := a.store.OrganisationApps(ctx, cur.user.OrganisationID)
+	eff, err := a.store.EffectiveApps(ctx, cur.user)
 	if err != nil {
 		serverError(w, r, err)
 		return
 	}
-	for _, oa := range orgApps {
-		if oa.Client.ID != id {
-			continue
-		}
-		if oa.Mode == "enabled" {
-			writeError(w, http.StatusForbidden, "required", "Your organisation has enabled this app for everyone.")
-			return
-		}
-		// Optional: hidden for this person, and its access revoked.
-		if err := a.store.RemoveAppForUser(ctx, cur.user.ID, id); err != nil {
-			serverError(w, r, err)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+	switch eff[id] {
+	case store.AppForced:
+		writeError(w, http.StatusForbidden, "required", "Your organisation has made this app always on for your account, so it can’t be removed.")
 		return
+	case store.AppEnabled:
+		// Hidden for this person from now on, and its access revoked.
+		err = a.store.RemoveAppForUser(ctx, cur.user.ID, id)
+	default:
+		err = a.store.RevokeClient(ctx, cur.user.ID, id)
 	}
-	if err := a.store.RevokeClient(ctx, cur.user.ID, id); err != nil {
+	if err != nil {
 		serverError(w, r, err)
 		return
 	}

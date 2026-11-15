@@ -90,8 +90,14 @@ func (a *API) Routes() http.Handler {
 			r.Post("/users/{userID}/status", a.setStatus)
 			r.Post("/users/{userID}/mfa/disable", a.disableMFA)
 			r.Get("/apps", a.listApps)
-			r.Put("/apps/{clientID}", a.putApp)
-			r.Delete("/apps/{clientID}", a.deleteApp)
+			r.Put("/apps/{clientID}", a.putAppPolicy)
+			r.Get("/groups", a.listGroups)
+			r.Post("/groups", a.createGroup)
+			r.Get("/groups/{groupID}", a.getGroup)
+			r.Patch("/groups/{groupID}", a.renameGroup)
+			r.Delete("/groups/{groupID}", a.deleteGroup)
+			r.Put("/groups/{groupID}/members/{userID}", a.addMember)
+			r.Delete("/groups/{groupID}/members/{userID}", a.removeMember)
 			r.Get("/settings", a.getSettings)
 			r.Put("/settings", a.putSettings)
 			r.Get("/password-policy", a.getPolicy)
@@ -729,100 +735,6 @@ func (a *API) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("organisation settings changed", "organisation", organisation(r).ID, "by", caller(r).ID)
 	writeJSON(w, http.StatusOK, map[string]any{"profileEditing": body.ProfileEditing})
-}
-
-// ── Organisation apps ────────────────────────────────────────────────────
-
-type appJSON struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Publisher    string `json:"publisher"`
-	Verification string `json:"verification"`
-}
-
-func appView(c store.Client) appJSON {
-	return appJSON{ID: c.ID, Name: c.Name, Publisher: c.Publisher, Verification: c.Verification}
-}
-
-// GET …/apps: Keston's own apps, the organisation's, and the others it
-// could add.
-func (a *API) listApps(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	builtin, err := a.store.BuiltinClients(ctx)
-	if err != nil {
-		serverError(w, r, err)
-		return
-	}
-	orgApps, err := a.store.OrganisationApps(ctx, organisation(r).ID)
-	if err != nil {
-		serverError(w, r, err)
-		return
-	}
-	all, err := a.store.AllClients(ctx)
-	if err != nil {
-		serverError(w, r, err)
-		return
-	}
-	type orgAppJSON struct {
-		App     appJSON `json:"app"`
-		Mode    string  `json:"mode"`
-		AddedAt string  `json:"addedAt"`
-	}
-	taken := map[string]bool{ClientID: true} // Keston Admin isn't for everyone
-	out := struct {
-		Builtin      []appJSON    `json:"builtin"`
-		Organisation []orgAppJSON `json:"organisation"`
-		Available    []appJSON    `json:"available"`
-	}{Builtin: []appJSON{}, Organisation: []orgAppJSON{}, Available: []appJSON{}}
-	for _, c := range builtin {
-		out.Builtin = append(out.Builtin, appView(c))
-		taken[c.ID] = true
-	}
-	for _, oa := range orgApps {
-		out.Organisation = append(out.Organisation, orgAppJSON{App: appView(oa.Client), Mode: oa.Mode,
-			AddedAt: oa.AddedAt.Format(timeFormat)})
-		taken[oa.Client.ID] = true
-	}
-	for _, c := range all {
-		if !taken[c.ID] {
-			out.Available = append(out.Available, appView(c))
-		}
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-// PUT …/apps/{clientID} {mode: enabled|optional}
-func (a *API) putApp(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Mode string `json:"mode"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	if body.Mode != "enabled" && body.Mode != "optional" {
-		writeFieldError(w, "mode", "Choose enabled for everyone, or optional")
-		return
-	}
-	c, err := a.store.ClientByID(r.Context(), chi.URLParam(r, "clientID"))
-	if err != nil || c.Builtin || c.ID == ClientID {
-		writeError(w, http.StatusNotFound, "not_found", "That app can't be added.")
-		return
-	}
-	if err := a.store.SetOrganisationApp(r.Context(), organisation(r).ID, c.ID, body.Mode); err != nil {
-		serverError(w, r, err)
-		return
-	}
-	slog.Info("organisation app set", "organisation", organisation(r).ID, "app", c.ID, "mode", body.Mode,
-		"by", caller(r).ID)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (a *API) deleteApp(w http.ResponseWriter, r *http.Request) {
-	if err := a.store.RemoveOrganisationApp(r.Context(), organisation(r).ID, chi.URLParam(r, "clientID")); err != nil {
-		serverError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // decodeOptional reads a JSON body if there is one.

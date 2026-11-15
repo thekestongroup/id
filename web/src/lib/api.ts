@@ -60,8 +60,8 @@ export interface Me {
 
 export interface ConnectedApp {
   client: ClientView
-  /** builtin: Keston's own; organisation: added by your organisation; user: added by you. */
-  source: 'builtin' | 'organisation' | 'user'
+  /** forced: on, and can't be removed; enabled: on, can be removed (both set by your organisation); user: added by you. */
+  source: 'forced' | 'enabled' | 'user'
   removable: boolean
   scopes: ScopeInfo[]
   /** When you allowed it; missing if you haven't signed in to it yet. */

@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -198,8 +197,6 @@ func intersect(a, b []string) []string {
 	}
 	return out
 }
-
-func since(t time.Time) time.Duration { return time.Since(t) }
 
 // decodeOptional reads a JSON body if there is one.
 func decodeOptional(r *http.Request, v any) error {

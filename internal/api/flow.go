@@ -68,8 +68,10 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		if slices.Contains(ar.Prompt, "login") && cur.session.AuthTime.Before(ar.CreatedAt) {
 			needsLogin = true
 		}
-		// max_age: the sign-in must be recent enough.
-		if ar.MaxAgeSeconds != nil && since(cur.session.AuthTime) > time.Duration(*ar.MaxAgeSeconds)*time.Second {
+		// max_age: the sign-in must be recent enough, counted from when the
+		// app asked (prompt=login arrives as max_age=0: a sign-in after that).
+		if ar.MaxAgeSeconds != nil &&
+			cur.session.AuthTime.Before(ar.CreatedAt.Add(-time.Duration(*ar.MaxAgeSeconds)*time.Second)) {
 			needsLogin = true
 		}
 	}
@@ -90,6 +92,11 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 	if cur.session.Stage == "password" {
 		res.Step = "mfa"
 		return res, 0, ""
+	}
+	// Turned off for them by their organisation (Keston Admin → Apps).
+	if eff, err := a.store.EffectiveApps(ctx, cur.user); err == nil && eff[client.ID] == store.AppDisabled {
+		return nil, http.StatusForbidden, cur.user.Organisation + " has turned off " + client.Name +
+			" for your account. Ask one of its admins if you need it."
 	}
 
 	required := withoutOpenID(intersect(ar.Scopes, client.RequiredScopes))

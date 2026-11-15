@@ -52,7 +52,7 @@ async function remove(app: ConnectedApp) {
           </span>
           <div v-if="app.source !== 'user'" class="mt-1">
             <Badge size="sm" color="blue">
-              {{ app.source === 'builtin' || !app.removable ? 'Enabled by your organisation' : 'Added by your organisation' }}
+              {{ app.source === 'forced' ? 'Enabled by your organisation' : 'Added by your organisation' }}
             </Badge>
           </div>
         </div>
