@@ -48,7 +48,7 @@ func (a *API) getSupport(w http.ResponseWriter, r *http.Request) {
 		"access":         map[string]any{"active": until != nil, "until": until},
 		"requests":       requests,
 		"lockouts":       lockouts,
-		"canManage":      a.canManage(ctx, caller(r), org.ID),
+		"canManage":      a.canManage(r, org.ID),
 	})
 }
 

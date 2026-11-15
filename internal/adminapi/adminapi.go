@@ -55,6 +55,7 @@ func (a *API) Routes() http.Handler {
 	r.Get("/password-rules", a.baselineRules)
 	r.Post("/password-check", a.passwordCheck)
 	r.Get("/domains/{domain}", a.domainAvailable)
+	r.Get("/permissions", a.listPermissions)
 
 	r.Get("/organisations", a.listOrganisations)
 	r.Post("/organisations", a.createOrganisation)
@@ -63,7 +64,8 @@ func (a *API) Routes() http.Handler {
 	r.Delete("/notifications", a.clearNotifications)
 
 	r.Route("/organisations/{orgID}", func(r chi.Router) {
-		// Seeing it: platform admins (Keston staff), and its global admins.
+		// Seeing it: platform admins (Keston staff), and its own users who
+		// have any permission in Keston Admin.
 		r.Use(a.requireView)
 		r.Get("/", a.getOrganisation)
 		r.Get("/support", a.getSupport)
@@ -76,33 +78,34 @@ func (a *API) Routes() http.Handler {
 		r.Post("/deletion", a.scheduleDeletion)
 		r.Delete("/deletion", a.cancelDeletion)
 
-		// Its accounts and settings: its global admins, or Keston support
-		// while a global admin has approved support access.
-		r.Group(func(r chi.Router) {
-			r.Use(a.requireManage)
-			r.Get("/users", a.listUsers)
-			r.Post("/users", a.createUser)
-			r.Get("/users/{userID}", a.getUser)
-			r.Patch("/users/{userID}", a.updateUser)
-			r.Put("/users/{userID}/picture", a.setUserPicture)
-			r.Delete("/users/{userID}/picture", a.removeUserPicture)
-			r.Post("/users/{userID}/reset-password", a.resetPassword)
-			r.Post("/users/{userID}/status", a.setStatus)
-			r.Post("/users/{userID}/mfa/disable", a.disableMFA)
-			r.Get("/apps", a.listApps)
-			r.Put("/apps/{clientID}", a.putAppPolicy)
-			r.Get("/groups", a.listGroups)
-			r.Post("/groups", a.createGroup)
-			r.Get("/groups/{groupID}", a.getGroup)
-			r.Patch("/groups/{groupID}", a.renameGroup)
-			r.Delete("/groups/{groupID}", a.deleteGroup)
-			r.Put("/groups/{groupID}/members/{userID}", a.addMember)
-			r.Delete("/groups/{groupID}/members/{userID}", a.removeMember)
-			r.Get("/settings", a.getSettings)
-			r.Put("/settings", a.putSettings)
-			r.Get("/password-policy", a.getPolicy)
-			r.Put("/password-policy", a.putPolicy)
-		})
+		// Its users and settings: its global admins, its users whose groups
+		// give them permissions, or Keston support through a support account
+		// (see support.go). Each needs its permission.
+		r.Get("/groups", a.listGroups)
+		r.With(a.need(store.PermViewUsers)).Get("/users", a.listUsers)
+		r.With(a.need(store.PermCreateUsers)).Post("/users", a.createUser)
+		r.With(a.need(store.PermViewUsers)).Get("/users/{userID}", a.getUser)
+		r.With(a.need(store.PermEditUsers)).Patch("/users/{userID}", a.updateUser)
+		r.With(a.need(store.PermEditUsers)).Put("/users/{userID}/picture", a.setUserPicture)
+		r.With(a.need(store.PermEditUsers)).Delete("/users/{userID}/picture", a.removeUserPicture)
+		r.With(a.need(store.PermResetPassword)).Post("/users/{userID}/reset-password", a.resetPassword)
+		r.With(a.need(store.PermUserStatus)).Post("/users/{userID}/status", a.setStatus)
+		r.With(a.need(store.PermResetMFA)).Post("/users/{userID}/mfa/disable", a.disableMFA)
+		r.With(a.need(store.PermApps)).Get("/apps", a.listApps)
+		r.With(a.need(store.PermApps)).Put("/apps/{clientID}", a.putAppPolicy)
+		r.With(a.need(store.PermGroups)).Post("/groups", a.createGroup)
+		r.With(a.need(store.PermViewUsers)).Get("/groups/{groupID}", a.getGroup)
+		r.With(a.need(store.PermGroups)).Patch("/groups/{groupID}", a.renameGroup)
+		r.With(a.need(store.PermGroups)).Delete("/groups/{groupID}", a.deleteGroup)
+		r.With(a.need(store.PermAssign)).Put("/groups/{groupID}/permissions", a.putGroupPermissions)
+		// Who's in a group: Manage groups, or Give permissions for a group
+		// that has permissions (checked in the handlers).
+		r.With(a.need(store.PermViewUsers)).Put("/groups/{groupID}/members/{userID}", a.addMember)
+		r.With(a.need(store.PermViewUsers)).Delete("/groups/{groupID}/members/{userID}", a.removeMember)
+		r.With(a.need(store.PermSettings)).Get("/settings", a.getSettings)
+		r.With(a.need(store.PermSettings)).Put("/settings", a.putSettings)
+		r.With(a.need(store.PermPolicy)).Get("/password-policy", a.getPolicy)
+		r.With(a.need(store.PermPolicy)).Put("/password-policy", a.putPolicy)
 	})
 
 	return r
@@ -115,9 +118,14 @@ type ctxKey int
 const (
 	userKey ctxKey = iota
 	orgKey
+	permsKey
 )
 
 func caller(r *http.Request) *store.User { return r.Context().Value(userKey).(*store.User) }
+
+// callerPerms: what the caller can do in Keston Admin, in their own
+// organisation.
+func callerPerms(r *http.Request) store.Perms { return r.Context().Value(permsKey).(store.Perms) }
 func organisation(r *http.Request) *store.Organisation {
 	return r.Context().Value(orgKey).(*store.Organisation)
 }
@@ -145,12 +153,18 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "signed_out", "Your session has ended. Sign in again.")
 			return
 		}
-		if !user.PlatformAdmin && user.Role != "global_admin" {
-			writeError(w, http.StatusForbidden, "not_admin",
-				"Keston Admin is for your organisation's global admins. Ask one of them if you need something changed.")
+		perms, err := a.store.PermissionsOf(r.Context(), user)
+		if err != nil {
+			serverError(w, r, err)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, user)))
+		if !user.PlatformAdmin && len(perms) == 0 {
+			writeError(w, http.StatusForbidden, "not_admin",
+				"Keston Admin is for your organisation's admins. Ask one of them if you need something changed.")
+			return
+		}
+		ctx := context.WithValue(r.Context(), userKey, user)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, permsKey, perms)))
 	})
 }
 
@@ -164,20 +178,29 @@ func isOwnAdmin(u *store.User, orgID string) bool {
 // support access and deletion (not a Keston support account).
 func decides(u *store.User, orgID string) bool { return isOwnAdmin(u, orgID) && !u.IsSupport() }
 
-// canManage: the organisation's global admins. Keston support manages an
-// organisation's users only through a support account in it, which the
-// organisation allows (see support.go).
-func (a *API) canManage(_ context.Context, u *store.User, orgID string) bool {
-	return isOwnAdmin(u, orgID)
+// permsIn: what the caller can do in this organisation: their permissions
+// in their own, nothing in anyone else's (Keston staff work in another
+// organisation only through a support account in it).
+func permsIn(r *http.Request, orgID string) store.Perms {
+	if caller(r).OrganisationID != orgID {
+		return store.Perms{}
+	}
+	return callerPerms(r)
 }
 
+// can: the caller has this permission in the organisation in the URL.
+func can(r *http.Request, perm string) bool { return permsIn(r, organisation(r).ID).Has(perm) }
+
+// canManage: any permission in the organisation (its users, apps…).
+func (a *API) canManage(r *http.Request, orgID string) bool { return len(permsIn(r, orgID)) > 0 }
+
 // requireView: platform admins see every organisation's details (not its
-// accounts); global admins see their own.
+// users); its own users with any permission see it.
 func (a *API) requireView(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "orgID")
 		u := caller(r)
-		if !u.PlatformAdmin && !isOwnAdmin(u, id) {
+		if !u.PlatformAdmin && !(u.OrganisationID == id && len(callerPerms(r)) > 0) {
 			writeError(w, http.StatusNotFound, "not_found", "That organisation doesn't exist.")
 			return
 		}
@@ -190,15 +213,48 @@ func (a *API) requireView(next http.Handler) http.Handler {
 	})
 }
 
-func (a *API) requireManage(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.canManage(r.Context(), caller(r), organisation(r).ID) {
-			writeError(w, http.StatusForbidden, "support_access",
-				"To see "+organisation(r).Name+"'s users, open your support account for it. One of its global admins needs to allow support access first.")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// need: the caller has this permission here.
+func (a *API) need(perm string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if can(r, perm) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if caller(r).OrganisationID != organisation(r).ID {
+				writeError(w, http.StatusForbidden, "support_access",
+					"To see "+organisation(r).Name+"'s users, open your support account for it. One of its global admins needs to allow support access first.")
+				return
+			}
+			writeError(w, http.StatusForbidden, "no_permission", "You don't have permission to do that. Ask one of your global admins.")
+		})
+	}
+}
+
+// canChange: the caller may change this user. Global admins can change
+// anyone; others only users whose permissions are all ones they have too
+// (so not global admins, or anyone with a permission they don't have).
+func (a *API) canChange(r *http.Request, u *store.User) (bool, error) {
+	if caller(r).Role == "global_admin" {
+		return true, nil
+	}
+	if u.Role == "global_admin" {
+		return false, nil
+	}
+	theirs, err := a.store.PermissionsOf(r.Context(), u)
+	if err != nil {
+		return false, err
+	}
+	return callerPerms(r).Covers(theirs.List()), nil
+}
+
+func outranked(w http.ResponseWriter, u *store.User) {
+	writeError(w, http.StatusForbidden, "outranked",
+		u.Name+" has permissions you don't, so you can't change them. Ask one of your global admins.")
+}
+
+func (a *API) listPermissions(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, store.Permissions)
 }
 
 // ── Validation ───────────────────────────────────────────────────────────
@@ -231,6 +287,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		"user":          a.userView(u),
 		"platformAdmin": u.PlatformAdmin,
 		"organisation":  org,
+		"permissions":   callerPerms(r).List(),
 	})
 }
 
@@ -257,7 +314,7 @@ func (a *API) passwordCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	pol := policy.Policy{}
 	if body.OrganisationID != "" {
-		if !a.canManage(r.Context(), caller(r), body.OrganisationID) {
+		if !a.canManage(r, body.OrganisationID) {
 			writeError(w, http.StatusNotFound, "not_found", "That organisation doesn't exist.")
 			return
 		}
@@ -377,7 +434,9 @@ func (a *API) getOrganisation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		*store.Organisation
 		CanManage bool `json:"canManage"`
-	}{org, a.canManage(r.Context(), caller(r), org.ID)})
+		// What the caller can do here (see store/permissions.go).
+		Permissions []string `json:"permissions"`
+	}{org, a.canManage(r, org.ID), permsIn(r, org.ID).List()})
 }
 
 // ── Accounts ─────────────────────────────────────────────────────────────
@@ -416,9 +475,22 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	out := make([]userJSON, len(users))
+	perms, err := a.store.PermissionsInOrganisation(r.Context(), organisation(r).ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	type row struct {
+		userJSON
+		// The caller can change them (see canChange).
+		CanChange bool `json:"canChange"`
+	}
+	mine, admin := callerPerms(r), caller(r).Role == "global_admin"
+	out := make([]row, len(users))
 	for i := range users {
-		out[i] = a.userView(&users[i])
+		u := &users[i]
+		can := !u.IsSupport() && (admin || (u.Role != "global_admin" && mine.Covers(perms[u.ID].List())))
+		out[i] = row{a.userView(u), can}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -438,6 +510,10 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 	user := normaliseUsername(body.Username)
 	if body.Role != "global_admin" {
 		body.Role = "member"
+	}
+	if body.Role == "global_admin" && caller(r).Role != "global_admin" {
+		writeFieldError(w, "role", "Only global admins can add global admins.")
+		return
 	}
 	switch {
 	case name == "" || len(name) > 200:
@@ -480,6 +556,17 @@ func (a *API) target(w http.ResponseWriter, r *http.Request) *store.User {
 		writeError(w, http.StatusConflict, "support_account",
 			"This is a Keston support account. It ends with support access (Overview).")
 		return nil
+	}
+	if r.Method != http.MethodGet {
+		ok, err := a.canChange(r, u)
+		if err != nil {
+			serverError(w, r, err)
+			return nil
+		}
+		if !ok {
+			outranked(w, u)
+			return nil
+		}
 	}
 	return u
 }
@@ -614,10 +701,35 @@ var nowFunc = time.Now
 
 // ── One account: details, profile, picture ───────────────────────────────
 
+// GET …/users/{id}: the user, their groups and permissions, and whether
+// the caller can change them.
 func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
-	if u := a.target(w, r); u != nil {
-		writeJSON(w, http.StatusOK, a.userView(u))
+	u := a.target(w, r)
+	if u == nil {
+		return
 	}
+	ctx := r.Context()
+	groups, err := a.store.GroupsOf(ctx, u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	perms, err := a.store.PermissionsOf(ctx, u)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	canChange, err := a.canChange(r, u)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		userJSON
+		Groups      []store.Group `json:"groups"`
+		Permissions []string      `json:"permissions"`
+		CanChange   bool          `json:"canChange"`
+	}{a.userView(u), groups, perms.List(), canChange && !u.IsSupport()})
 }
 
 // PATCH …/users/{id} {name?, username?, role?}: admins can always change
@@ -656,6 +768,10 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 	if body.Role != nil {
 		if *body.Role != "member" && *body.Role != "global_admin" {
 			writeFieldError(w, "role", "Choose member or global admin")
+			return
+		}
+		if caller(r).Role != "global_admin" && *body.Role != u.Role {
+			writeFieldError(w, "role", "Only global admins can change who's a global admin.")
 			return
 		}
 		if u.ID == caller(r).ID && *body.Role != "global_admin" && !caller(r).PlatformAdmin {

@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -101,9 +102,28 @@ func (a *API) renameGroup(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// mayChangeGroup: changing a group's members (or deleting it) needs Manage
+// groups; for a group that gives permissions, Give permissions and every
+// one of its permissions too, so nobody can hand out more than they have.
+func mayChangeGroup(w http.ResponseWriter, r *http.Request, g *store.Group) bool {
+	if len(g.Permissions) == 0 {
+		if can(r, store.PermGroups) || can(r, store.PermAssign) {
+			return true
+		}
+		writeError(w, http.StatusForbidden, "no_permission", "You don't have permission to do that. Ask one of your global admins.")
+		return false
+	}
+	if can(r, store.PermAssign) && permsIn(r, organisation(r).ID).Covers(g.Permissions) {
+		return true
+	}
+	writeError(w, http.StatusForbidden, "no_permission",
+		g.Name+" gives permissions you don't have, so you can't change who's in it. Ask one of your global admins.")
+	return false
+}
+
 func (a *API) deleteGroup(w http.ResponseWriter, r *http.Request) {
 	g := a.group(w, r)
-	if g == nil {
+	if g == nil || !mayChangeGroup(w, r, g) {
 		return
 	}
 	if err := a.store.DeleteGroup(r.Context(), organisation(r).ID, g.ID); err != nil {
@@ -113,14 +133,34 @@ func (a *API) deleteGroup(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *API) addMember(w http.ResponseWriter, r *http.Request) {
-	g := a.group(w, r)
-	if g == nil {
-		return
-	}
+// member is the user in the URL, for adding to or removing from a group:
+// in this organisation, not a support account, and someone the caller can
+// change.
+func (a *API) member(w http.ResponseWriter, r *http.Request) *store.User {
 	u, err := a.store.UserByID(r.Context(), chi.URLParam(r, "userID"))
 	if err != nil || u.OrganisationID != organisation(r).ID || u.IsSupport() {
 		writeError(w, http.StatusNotFound, "not_found", "That user doesn't exist.")
+		return nil
+	}
+	ok, err := a.canChange(r, u)
+	if err != nil {
+		serverError(w, r, err)
+		return nil
+	}
+	if !ok {
+		outranked(w, u)
+		return nil
+	}
+	return u
+}
+
+func (a *API) addMember(w http.ResponseWriter, r *http.Request) {
+	g := a.group(w, r)
+	if g == nil || !mayChangeGroup(w, r, g) {
+		return
+	}
+	u := a.member(w, r)
+	if u == nil {
 		return
 	}
 	if err := a.store.AddGroupMember(r.Context(), g.ID, u.ID); err != nil {
@@ -132,10 +172,14 @@ func (a *API) addMember(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) removeMember(w http.ResponseWriter, r *http.Request) {
 	g := a.group(w, r)
-	if g == nil {
+	if g == nil || !mayChangeGroup(w, r, g) {
 		return
 	}
-	if err := a.store.RemoveGroupMember(r.Context(), g.ID, chi.URLParam(r, "userID")); err != nil {
+	u := a.member(w, r)
+	if u == nil {
+		return
+	}
+	if err := a.store.RemoveGroupMember(r.Context(), g.ID, u.ID); err != nil {
 		serverError(w, r, err)
 		return
 	}
@@ -237,4 +281,38 @@ func (a *API) putAppPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// PUT …/groups/{id}/permissions {permissions: [...]}: what the group's users
+// can do in Keston Admin. Only up to the caller's own permissions, and only
+// for a group whose current permissions they all have.
+func (a *API) putGroupPermissions(w http.ResponseWriter, r *http.Request) {
+	g := a.group(w, r)
+	if g == nil {
+		return
+	}
+	var body struct {
+		Permissions []string `json:"permissions"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	perms := store.CleanPermissions(body.Permissions)
+	mine := permsIn(r, organisation(r).ID)
+	if !mine.Covers(g.Permissions) {
+		writeError(w, http.StatusForbidden, "no_permission",
+			g.Name+" already gives permissions you don't have, so you can't change them. Ask one of your global admins.")
+		return
+	}
+	if !mine.Covers(perms) {
+		writeError(w, http.StatusForbidden, "no_permission", "You can only give permissions you have yourself.")
+		return
+	}
+	if err := a.store.SetGroupPermissions(r.Context(), g.ID, perms); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	slog.Info("group permissions changed", "group", g.ID, "permissions", perms, "by", caller(r).ID)
+	updated, _ := a.store.Group(r.Context(), organisation(r).ID, g.ID)
+	writeJSON(w, http.StatusOK, updated)
 }

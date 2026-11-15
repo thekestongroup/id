@@ -14,9 +14,12 @@ type Group struct {
 	Name        string    `json:"name"`
 	MemberCount int       `json:"memberCount"`
 	CreatedAt   time.Time `json:"createdAt"`
+	// What its users can do in Keston Admin (see permissions.go).
+	Permissions []string `json:"permissions"`
 }
 
-const groupColumns = `g.id, g.name, (SELECT count(*) FROM group_members m WHERE m.group_id = g.id), g.created_at`
+const groupColumns = `g.id, g.name, (SELECT count(*) FROM group_members m WHERE m.group_id = g.id), g.created_at,
+	ARRAY(SELECT p.permission FROM group_permissions p WHERE p.group_id = g.id ORDER BY p.permission)`
 
 func (s *Store) Groups(ctx context.Context, orgID string) ([]Group, error) {
 	rows, err := s.DB.Query(ctx, `SELECT `+groupColumns+` FROM groups g WHERE g.organisation_id = $1
