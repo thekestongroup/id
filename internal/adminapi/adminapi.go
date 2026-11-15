@@ -22,28 +22,30 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/zitadel/oidc/v3/pkg/oidc"
 
 	"github.com/thekestongroup/id/internal/policy"
 	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
+	"github.com/thekestongroup/id/kit/apierr"
+	"github.com/thekestongroup/id/kit/auth"
 )
 
-// ClientID is Keston Admin's OAuth client: only its tokens are accepted.
+// ClientID is Keston Admin's OAuth client (not set per app on the Apps page).
 const ClientID = "admin"
 
 // VerifyToken checks an access token's signature, issuer and expiry.
-type VerifyToken func(ctx context.Context, token string) (*oidc.AccessTokenClaims, error)
 
 type API struct {
 	store  *store.Store
-	verify VerifyToken
+	verify *auth.Verifier
 	// Keston ID's address, for profile picture URLs.
 	issuer string
 }
 
-func New(s *store.Store, verify VerifyToken, issuer string) *API {
+// New: verify checks access tokens for Keston ID's API (audience
+// auth.AudienceKestonID).
+func New(s *store.Store, verify *auth.Verifier, issuer string) *API {
 	return &API{store: s, verify: verify, issuer: issuer}
 }
 
@@ -137,13 +139,17 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "signed_out", "Sign in to continue.")
 			return
 		}
-		claims, err := a.verify(r.Context(), token)
-		if err != nil || claims.ClientID != ClientID {
-			writeError(w, http.StatusUnauthorized, "signed_out", "Your session has ended. Sign in again.")
+		// A Keston ID access token for this API (kit/auth: signature, issuer,
+		// audience, expiry), from Keston Admin or another of Keston's apps.
+		claims, err := a.verify.Verify(r.Context(), token)
+		if err != nil {
+			apierr.Unauthorized(w)
 			return
 		}
-		// Still valid: not revoked (signed out, access removed, disabled).
-		if _, userID, _, err := a.store.AccessTokenActive(r.Context(), claims.JWTID); err != nil || userID == nil ||
+		// Keston ID can also check it hasn't been revoked (signed out, access
+		// removed, disabled) and use the user's current permissions rather
+		// than the token's; other products rely on tokens being short-lived.
+		if _, userID, _, err := a.store.AccessTokenActive(r.Context(), claims.TokenID); err != nil || userID == nil ||
 			*userID != claims.Subject {
 			writeError(w, http.StatusUnauthorized, "signed_out", "Your session has ended. Sign in again.")
 			return
@@ -656,30 +662,20 @@ func noStore(next http.Handler) http.Handler {
 	})
 }
 
-type apiError struct {
-	Error   string `json:"error"`
-	Message string `json:"message"`
-	Field   string `json:"field,omitempty"`
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// Errors: the format every Keston API shares (kit/apierr).
 func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, apiError{Error: code, Message: message})
+	apierr.Write(w, status, code, message)
 }
 
-func writeFieldError(w http.ResponseWriter, field, message string) {
-	writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: message, Field: field})
-}
+func writeFieldError(w http.ResponseWriter, field, message string) { apierr.Field(w, field, message) }
 
-func serverError(w http.ResponseWriter, r *http.Request, err error) {
-	slog.ErrorContext(r.Context(), "admin api error", "path", r.URL.Path, "error", err)
-	writeError(w, http.StatusInternalServerError, "server_error", "Something went wrong. Try again.")
-}
+func serverError(w http.ResponseWriter, r *http.Request, err error) { apierr.Server(w, r, err) }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 256<<10)

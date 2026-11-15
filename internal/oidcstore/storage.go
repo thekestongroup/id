@@ -22,6 +22,7 @@ import (
 	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
+	"github.com/thekestongroup/id/kit/auth"
 )
 
 type Storage struct {
@@ -69,7 +70,7 @@ func (s *Storage) CreateAuthRequest(ctx context.Context, req *oidc.AuthRequest, 
 	if err != nil {
 		return nil, err
 	}
-	return authRequest{created}, nil
+	return authRequest{created, s.audience(ctx, created.ClientID)}, nil
 }
 
 func (s *Storage) AuthRequestByID(ctx context.Context, id string) (op.AuthRequest, error) {
@@ -77,7 +78,7 @@ func (s *Storage) AuthRequestByID(ctx context.Context, id string) (op.AuthReques
 	if err != nil {
 		return nil, fmt.Errorf("auth request: %w", err)
 	}
-	return authRequest{a}, nil
+	return authRequest{a, s.audience(ctx, a.ClientID)}, nil
 }
 
 func (s *Storage) AuthRequestByCode(ctx context.Context, code string) (op.AuthRequest, error) {
@@ -85,7 +86,7 @@ func (s *Storage) AuthRequestByCode(ctx context.Context, code string) (op.AuthRe
 	if err != nil {
 		return nil, fmt.Errorf("auth code: %w", err)
 	}
-	return authRequest{a}, nil
+	return authRequest{a, s.audience(ctx, a.ClientID)}, nil
 }
 
 func (s *Storage) SaveAuthCode(ctx context.Context, id, code string) error {
@@ -305,8 +306,58 @@ func (s *Storage) SetIntrospectionFromToken(ctx context.Context, resp *oidc.Intr
 	return nil
 }
 
-func (s *Storage) GetPrivateClaimsFromScopes(context.Context, string, string, []string) (map[string]any, error) {
-	return nil, nil
+// ── Who tokens are for, and what they say ───────────────────────────────
+
+// audience: which APIs accept an app's access tokens. Each Keston API checks
+// its own audience (kit/auth):
+//   - Keston Admin: Keston ID's API and every Keston product's API, as it
+//     manages them all
+//   - Keston's own apps (e.g. Keston Work): their own API and Keston ID's
+//   - other apps: only themselves (Keston ID's userinfo)
+func (s *Storage) audience(ctx context.Context, clientID string) []string {
+	aud := []string{clientID}
+	c, err := s.store.ClientByID(ctx, clientID)
+	if err != nil || c.Verification != "owned" {
+		return aud
+	}
+	aud = append(aud, auth.AudienceKestonID)
+	if clientID == adminClientID {
+		products, err := s.store.BuiltinClients(ctx)
+		if err == nil {
+			for _, p := range products {
+				aud = append(aud, p.ID)
+			}
+		}
+	}
+	return aud
+}
+
+// adminClientID is Keston Admin's client ID.
+const adminClientID = "admin"
+
+// GetPrivateClaimsFromScopes adds, for Keston's own apps, what Keston APIs
+// need to authorise the caller without asking Keston ID (kit/auth.Claims):
+// their organisation, their permissions there, and whether they're Keston
+// staff. Third-party apps don't get these.
+func (s *Storage) GetPrivateClaimsFromScopes(ctx context.Context, userID, clientID string, _ []string) (map[string]any,
+	error) {
+	c, err := s.store.ClientByID(ctx, clientID)
+	if err != nil || c.Verification != "owned" || userID == "" {
+		return nil, nil
+	}
+	u, err := s.store.UserByID(ctx, userID)
+	if err != nil {
+		return nil, nil
+	}
+	perms, err := s.store.PermissionsOf(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"org":            u.OrganisationID,
+		"perms":          perms.List(),
+		"platform_admin": u.PlatformAdmin,
+	}, nil
 }
 
 // JWT profile grants (service accounts) aren't supported yet.

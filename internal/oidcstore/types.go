@@ -10,15 +10,24 @@ import (
 	"github.com/thekestongroup/id/internal/store"
 )
 
-// authRequest adapts a stored auth request to op.AuthRequest.
-type authRequest struct{ *store.AuthRequest }
+// authRequest adapts a stored auth request to op.AuthRequest. audience is
+// who its tokens are for (see Storage.audience).
+type authRequest struct {
+	*store.AuthRequest
+	audience []string
+}
 
 var _ op.AuthRequest = authRequest{}
 
-func (a authRequest) GetID() string                      { return a.ID }
-func (a authRequest) GetACR() string                     { return "" }
-func (a authRequest) GetAMR() []string                   { return a.AMR }
-func (a authRequest) GetAudience() []string              { return []string{a.ClientID} }
+func (a authRequest) GetID() string    { return a.ID }
+func (a authRequest) GetACR() string   { return "" }
+func (a authRequest) GetAMR() []string { return a.AMR }
+func (a authRequest) GetAudience() []string {
+	if len(a.audience) == 0 {
+		return []string{a.ClientID}
+	}
+	return a.audience
+}
 func (a authRequest) GetClientID() string                { return a.ClientID }
 func (a authRequest) GetNonce() string                   { return a.Nonce }
 func (a authRequest) GetRedirectURI() string             { return a.RedirectURI }

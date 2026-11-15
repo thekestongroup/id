@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/zitadel/oidc/v3/pkg/oidc"
 	"github.com/zitadel/oidc/v3/pkg/op"
 	"golang.org/x/text/language"
@@ -25,6 +26,7 @@ import (
 	"github.com/thekestongroup/id/internal/config"
 	"github.com/thekestongroup/id/internal/oidcstore"
 	"github.com/thekestongroup/id/internal/store"
+	"github.com/thekestongroup/id/kit/auth"
 )
 
 func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS fs.FS) (http.Handler, error) {
@@ -86,11 +88,20 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 
 	// Keston Admin's API. Caddy serves it at admin.keston.co/api/…, so the
 	// admin app calls it on its own origin (no CORS).
-	verify := func(ctx context.Context, token string) (*oidc.AccessTokenClaims, error) {
-		v := provider.AccessTokenVerifier(op.ContextWithIssuer(ctx, cfg.Issuer))
-		return op.VerifyAccessToken[*oidc.AccessTokenClaims](ctx, token, v)
-	}
-	admin := adminapi.New(st, verify, cfg.Issuer)
+	// Checked with kit/auth like every Keston API, against Keston ID's own
+	// keys (no HTTP round trip to itself).
+	ownKeys := auth.KeysFunc(func(ctx context.Context) ([]jose.JSONWebKey, error) {
+		keys, err := storage.KeySet(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]jose.JSONWebKey, len(keys))
+		for i, k := range keys {
+			out[i] = jose.JSONWebKey{Key: k.Key(), KeyID: k.ID(), Algorithm: string(k.Algorithm()), Use: k.Use()}
+		}
+		return out, nil
+	})
+	admin := adminapi.New(st, auth.NewVerifier(cfg.Issuer, auth.AudienceKestonID, ownKeys), cfg.Issuer)
 	// Self-service sign-up: no sign-in (rate limited). Mounted first, so it
 	// isn't behind the admin API's token check.
 	r.Mount("/admin/v1/public", admin.PublicRoutes())

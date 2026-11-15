@@ -13,6 +13,7 @@ RUN pnpm build
 FROM golang:1.27-alpine AS go
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY kit ./kit
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd ./cmd
 COPY internal ./internal
