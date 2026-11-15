@@ -4,7 +4,7 @@ import { ref, watch } from 'vue'
 import { api } from '../lib/api'
 import { loadMe } from '../lib/session'
 
-/** Turning off two-step verification, which needs the password. */
+/** Turning off MFA, which needs the password. */
 const open = defineModel<boolean>('open', { default: false })
 const { notify } = useNotifications()
 
@@ -24,10 +24,10 @@ async function turnOff() {
   if (error.value) return
   status.value = 'loading'
   try {
-    await api.twoStepDisable(password.value)
+    await api.mfaDisable(password.value)
     await loadMe(true)
     open.value = false
-    notify({ title: 'Two-step verification is off', description: 'Only your password is needed to sign in now.' })
+    notify({ title: 'MFA is off', description: 'Only your password is needed to sign in now.' })
   } catch (e) {
     status.value = 'idle'
     error.value = e instanceof Error ? e.message : String(e)
@@ -38,7 +38,7 @@ async function turnOff() {
 <template>
   <Slideover
     v-model:open="open"
-    title="Turn off two-step verification"
+    title="Turn off MFA"
     description="Anyone with your password could then sign in as you. Your backup codes will stop working."
     initial-focus="auto"
   >

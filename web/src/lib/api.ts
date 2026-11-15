@@ -36,7 +36,7 @@ export interface UserView {
 
 /** What the sign-in flow shows next. */
 export interface Flow {
-  step: 'sign-in' | 'choose' | 'two-step' | 'consent' | 'redirect' | 'account'
+  step: 'sign-in' | 'choose' | 'mfa' | 'consent' | 'redirect' | 'account'
   redirect?: string
   client?: ClientView
   scopes?: { required: ScopeInfo[]; optional: ScopeInfo[] }
@@ -55,7 +55,7 @@ export interface Me {
   username: string
   domain: string
   editable: Editable
-  security: { twoStep: boolean; backupCodesLeft: number; passwordChangedAt: string }
+  security: { mfa: boolean; backupCodesLeft: number; passwordChangedAt: string }
 }
 
 export interface ConnectedApp {
@@ -84,7 +84,7 @@ export interface SignedInAccount {
   email: string
   organisation: string
   active: boolean
-  needsTwoStep: boolean
+  needsMfa: boolean
 }
 
 export class ApiError extends Error {
@@ -126,8 +126,8 @@ export const api = {
     request<Flow>('GET', `/flow${authRequestID ? `?authRequestID=${encodeURIComponent(authRequestID)}` : ''}`),
   signIn: (email: string, password: string, authRequestID?: string) =>
     request<Flow>('POST', '/sign-in', { email, password, authRequestID }),
-  twoStep: (code: string, kind: 'app' | 'backup', authRequestID?: string) =>
-    request<Flow>('POST', '/two-step', { code, kind, authRequestID }),
+  mfa: (code: string, kind: 'app' | 'backup', authRequestID?: string) =>
+    request<Flow>('POST', '/mfa', { code, kind, authRequestID }),
   consent: (authRequestID: string, scopes: string[]) =>
     request<Flow>('POST', '/consent', { authRequestID, scopes }),
   /** Signs the active account (or every account) out of Keston ID and its apps. */
@@ -159,8 +159,8 @@ export const api = {
   endSession: (id: string) => request<void>('DELETE', `/me/sessions/${encodeURIComponent(id)}`, {}),
   changePassword: (current: string, next: string) => request<void>('POST', '/me/password', { current, new: next }),
   /** A new authenticator secret (not on until confirmed), with its QR code as a data URI. */
-  twoStepSetup: () =>
-    request<{ secret: string; otpauthUrl: string; qrCode: string }>('POST', '/me/two-step/setup', {}),
-  twoStepEnable: (code: string) => request<{ backupCodes: string[] }>('POST', '/me/two-step/enable', { code }),
-  twoStepDisable: (password: string) => request<void>('POST', '/me/two-step/disable', { password }),
+  mfaSetup: () =>
+    request<{ secret: string; otpauthUrl: string; qrCode: string }>('POST', '/me/mfa/setup', {}),
+  mfaEnable: (code: string) => request<{ backupCodes: string[] }>('POST', '/me/mfa/enable', { code }),
+  mfaDisable: (password: string) => request<void>('POST', '/me/mfa/disable', { password }),
 }

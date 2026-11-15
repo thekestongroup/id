@@ -35,7 +35,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		// What this person may change themselves (their organisation decides).
 		"editable": org.ProfileEditing,
 		"security": map[string]any{
-			"twoStep":           cur.user.TOTPEnabled,
+			"mfa":               cur.user.TOTPEnabled,
 			"backupCodesLeft":   len(cur.user.BackupCodes),
 			"passwordChangedAt": cur.user.PasswordChangedAt,
 			"passwordRules":     a.store.PolicyFor(r.Context(), cur.user.OrganisationID).Rules(),
@@ -267,12 +267,12 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/me/two-step/setup: a new authenticator secret, not yet on.
-func (a *API) twoStepSetup(w http.ResponseWriter, r *http.Request) {
+// POST /api/me/mfa/setup: a new authenticator secret, not yet on.
+func (a *API) mfaSetup(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	// A new secret would replace the one in use: turn it off first.
 	if cur.user.TOTPEnabled {
-		writeError(w, http.StatusConflict, "already_on", "Two-step verification is already on.")
+		writeError(w, http.StatusConflict, "already_on", "MFA is already on.")
 		return
 	}
 	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Keston ID", AccountName: cur.user.Email})
@@ -298,8 +298,8 @@ func (a *API) twoStepSetup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /api/me/two-step/enable: confirm with a code, get backup codes.
-func (a *API) twoStepEnable(w http.ResponseWriter, r *http.Request) {
+// POST /api/me/mfa/enable: confirm with a code, get backup codes.
+func (a *API) mfaEnable(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Code string `json:"code"`
 	}
@@ -313,7 +313,7 @@ func (a *API) twoStepEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user.TOTPSecret == nil {
-		writeError(w, http.StatusConflict, "no_setup", "Start setting up two-step verification first.")
+		writeError(w, http.StatusConflict, "no_setup", "Start setting up MFA first.")
 		return
 	}
 	key, err := a.store.Box.Open(user.TOTPSecret)
@@ -333,8 +333,8 @@ func (a *API) twoStepEnable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"backupCodes": codes})
 }
 
-// POST /api/me/two-step/disable: needs the password.
-func (a *API) twoStepDisable(w http.ResponseWriter, r *http.Request) {
+// POST /api/me/mfa/disable: needs the password.
+func (a *API) mfaDisable(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Password string `json:"password"`
 	}

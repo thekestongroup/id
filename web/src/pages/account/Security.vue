@@ -2,8 +2,8 @@
 import { Badge, Button, Card, PageHeader, formatDate } from '@thekestongroup/ui'
 import { computed, ref } from 'vue'
 import ChangePasswordSlideover from '../../components/ChangePasswordSlideover.vue'
-import TwoStepOffSlideover from '../../components/TwoStepOffSlideover.vue'
-import TwoStepSetupSlideover from '../../components/TwoStepSetupSlideover.vue'
+import MfaOffSlideover from '../../components/MfaOffSlideover.vue'
+import MfaSetupSlideover from '../../components/MfaSetupSlideover.vue'
 import { me } from '../../lib/session'
 
 /** How you prove it's you. Each change happens in its own Slideover. */
@@ -30,19 +30,19 @@ const backupLeft = computed(() => {
 
   <!-- The On / Off badge sits beside the title, as in PageHeader's #badge.
        With the header slot instead of title, the card is named by its h2 here. -->
-  <Card as="section" aria-labelledby="two-step-heading">
+  <Card as="section" aria-labelledby="mfa-heading">
     <template #header>
       <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <h2 id="two-step-heading" class="text-base font-bold">Two-step verification</h2>
-        <Badge v-if="security.twoStep" size="sm" color="green">On</Badge>
+        <h2 id="mfa-heading" class="text-base font-bold">Multi-factor authentication (MFA)</h2>
+        <Badge v-if="security.mfa" size="sm" color="green">On</Badge>
         <Badge v-else size="sm" color="yellow">Off</Badge>
       </div>
     </template>
     <template #actions>
-      <Button v-if="security.twoStep" size="sm" @click="turningOff = true">Turn off</Button>
+      <Button v-if="security.mfa" size="sm" @click="turningOff = true">Turn off</Button>
       <Button v-else size="sm" variant="primary" @click="settingUp = true">Turn on</Button>
     </template>
-    <p v-if="security.twoStep" class="text-sm text-black/65">
+    <p v-if="security.mfa" class="text-sm text-black/65">
       After your password, you enter a code from your authenticator app. {{ backupLeft }}.
     </p>
     <p v-else class="text-sm text-black/65">
@@ -52,6 +52,6 @@ const backupLeft = computed(() => {
   </Card>
 
   <ChangePasswordSlideover v-model:open="changingPassword" />
-  <TwoStepSetupSlideover v-model:open="settingUp" />
-  <TwoStepOffSlideover v-model:open="turningOff" />
+  <MfaSetupSlideover v-model:open="settingUp" />
+  <MfaOffSlideover v-model:open="turningOff" />
 </template>

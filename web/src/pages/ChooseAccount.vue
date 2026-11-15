@@ -76,7 +76,7 @@ function useAnother() {
                   <Badge v-if="account.active && !client" size="sm" color="green">Using now</Badge>
                 </span>
                 <span class="truncate text-xs text-black/65">{{ account.email }}</span>
-                <span v-if="account.needsTwoStep" class="text-xs text-black/65">Needs a code to finish signing in</span>
+                <span v-if="account.needsMfa" class="text-xs text-black/65">Needs a code to finish signing in</span>
               </span>
               <Spinner v-if="choosing === account.id" size="sm" label="Switching" />
               <ChevronRight v-else class="size-4 shrink-0 text-black/55" aria-hidden="true" />

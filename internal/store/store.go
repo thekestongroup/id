@@ -257,7 +257,7 @@ func (s *Store) SessionByToken(ctx context.Context, token string) (*Session, err
 		WHERE id = $1 AND expires_at > now() RETURNING `+sessionColumns, secret.Hash(token)))
 }
 
-// VerifySession records the second step.
+// VerifySession records MFA (the second factor).
 func (s *Store) VerifySession(ctx context.Context, id string, method string) (*Session, error) {
 	return scanSession(s.DB.QueryRow(ctx, `UPDATE sessions SET stage = 'verified', amr = array_append(amr, $2),
 		auth_time = now() WHERE id = $1 RETURNING `+sessionColumns, id, method))

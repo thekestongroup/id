@@ -15,7 +15,7 @@ import (
 
 // flowResponse tells the web UI which page comes next.
 //
-//	step: "sign-in" | "choose" | "two-step" | "consent" | "redirect" | "account"
+//	step: "sign-in" | "choose" | "mfa" | "consent" | "redirect" | "account"
 type flowResponse struct {
 	Step     string      `json:"step"`
 	Redirect string      `json:"redirect,omitempty"`
@@ -43,7 +43,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		case cur == nil:
 			res.Step = "sign-in"
 		case cur.session.Stage == "password":
-			res.Step = "two-step"
+			res.Step = "mfa"
 		default:
 			res.Step = "account"
 		}
@@ -88,7 +88,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		return res, 0, ""
 	}
 	if cur.session.Stage == "password" {
-		res.Step = "two-step"
+		res.Step = "mfa"
 		return res, 0, ""
 	}
 
@@ -220,8 +220,8 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 	a.respondNext(w, r, &current{session: sess, user: user, token: token}, body.AuthRequestID)
 }
 
-// POST /api/two-step: a code from an authenticator app, or a backup code.
-func (a *API) twoStep(w http.ResponseWriter, r *http.Request) {
+// POST /api/mfa: a code from an authenticator app, or a backup code.
+func (a *API) mfa(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Code          string `json:"code"`
 		Kind          string `json:"kind"` // "app" (default) or "backup"

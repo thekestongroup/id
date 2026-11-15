@@ -43,8 +43,8 @@ export async function follow(router: Router, flow: Flow, authRequestID?: string)
       return router.replace({ path: '/consent', query })
     case 'choose':
       return router.replace({ path: '/choose-account', query })
-    case 'two-step':
-      return router.replace({ path: '/two-step', query })
+    case 'mfa':
+      return router.replace({ path: '/mfa', query })
     default:
       return router.replace({ path: '/sign-in', query })
   }

@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 import { loadMe } from '../lib/session'
 
 /**
- * Turning on two-step verification, as a multi-step Slideover:
+ * Turning on MFA (multi-factor authentication), as a multi-step Slideover:
  * 1. Add Keston ID to an authenticator app: scan the QR code, or open it in
  *    the app (on a phone), or type the setup key.
  * 2. Enter the code the app shows, which turns it on.
@@ -41,7 +41,7 @@ watch(open, async (isOpen) => {
   codeStatus.value = codeText.value = undefined
   showKey.value = false
   try {
-    setup.value = await api.twoStepSetup()
+    setup.value = await api.mfaSetup()
   } catch (e) {
     setupError.value = message(e)
   }
@@ -58,7 +58,7 @@ async function enable(): Promise<boolean> {
   codeStatus.value = 'loading'
   codeText.value = 'Checking code…'
   try {
-    backupCodes.value = (await api.twoStepEnable(code.value)).backupCodes
+    backupCodes.value = (await api.mfaEnable(code.value)).backupCodes
     turnedOn.value = true
     codeStatus.value = 'success'
     codeText.value = 'Code accepted'
@@ -89,7 +89,7 @@ async function finished() {
   await loadMe(true)
   notify({
     type: 'success',
-    title: 'Two-step verification is on',
+    title: 'MFA is on',
     description: "Next time you sign in, we'll ask for a code from your authenticator app.",
   })
 }
@@ -99,7 +99,7 @@ async function finished() {
   <Slideover
     v-model:open="open"
     v-model:step="step"
-    title="Turn on two-step verification"
+    title="Turn on MFA"
     :steps="steps"
     :validate-step="validateStep"
     finish-label="Done"

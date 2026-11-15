@@ -19,7 +19,7 @@ type Config struct {
 	Addr string
 	// Postgres connection string.
 	DatabaseURL string
-	// 32 bytes, base64. Encrypts signing keys and two-step secrets in the
+	// 32 bytes, base64. Encrypts signing keys and MFA secrets in the
 	// database, and opaque tokens. Same on every replica; keep it secret.
 	SecretKey [32]byte
 	// Lifetimes.

@@ -109,8 +109,8 @@ type accountView struct {
 	Email        string `json:"email"`
 	Organisation string `json:"organisation"`
 	Active       bool   `json:"active"`
-	// Signed in with a password, but not the second step yet.
-	NeedsTwoStep bool `json:"needsTwoStep"`
+	// Signed in with a password, but not MFA yet.
+	NeedsMFA bool `json:"needsMfa"`
 }
 
 // GET /api/accounts: the accounts signed in to this browser.
@@ -118,7 +118,7 @@ func (a *API) accounts(w http.ResponseWriter, r *http.Request) {
 	out := []accountView{}
 	for i, c := range a.signedIn(r) {
 		out = append(out, accountView{ID: c.session.ID, Name: c.user.Name, Email: c.user.Email,
-			Organisation: c.user.Organisation, Active: i == 0, NeedsTwoStep: c.session.Stage != "verified"})
+			Organisation: c.user.Organisation, Active: i == 0, NeedsMFA: c.session.Stage != "verified"})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

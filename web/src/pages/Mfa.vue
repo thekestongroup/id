@@ -7,10 +7,10 @@ import { api } from '../lib/api'
 import { useFlow } from '../lib/useFlow'
 
 /**
- * The second step: a code from an authenticator app, or a backup code. From
+ * MFA: a code from an authenticator app, or a backup code. From
  * the TwoStepCode story in Keston UI's "Examples/Keston ID".
  */
-const { authRequestID, client, error: flowError, loading, next } = useFlow('two-step')
+const { authRequestID, client, error: flowError, loading, next } = useFlow('mfa')
 
 const mode = ref<'app' | 'backup'>('app')
 const code = ref('')
@@ -31,7 +31,7 @@ async function check(value = code.value) {
   status.value = 'loading'
   statusText.value = 'Checking code…'
   try {
-    const flow = await api.twoStep(value, 'app', authRequestID.value)
+    const flow = await api.mfa(value, 'app', authRequestID.value)
     status.value = 'success'
     statusText.value = 'Code accepted'
     await next(flow)
@@ -47,7 +47,7 @@ async function checkBackup() {
   if (backupError.value) return
   checkingBackup.value = true
   try {
-    await next(await api.twoStep(backup.value, 'backup', authRequestID.value))
+    await next(await api.mfa(backup.value, 'backup', authRequestID.value))
   } catch (e) {
     backupError.value = message(e)
   } finally {
@@ -74,7 +74,7 @@ async function switchMode(to: 'app' | 'backup') {
               <template v-if="mode === 'app'">
                 Open your authenticator app and enter the code for Keston ID.
               </template>
-              <template v-else>Enter one of the backup codes you saved when you set up two-step verification.</template>
+              <template v-else>Enter one of the backup codes you saved when you set up MFA.</template>
             </p>
           </div>
 

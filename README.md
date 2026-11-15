@@ -21,9 +21,9 @@ OIDC tokens.
 |---|---|
 | OIDC / OAuth 2.0 | Authorization code flow with PKCE, refresh tokens (rotated on every use), JWT access tokens (RS256), userinfo, introspection, revocation, RP-initiated logout, discovery |
 | Sign-in | Email and password (Argon2id), failed attempts lock the account for 15 minutes after 5 tries |
-| Two-step verification | Authenticator app (TOTP), 10 one-time backup codes |
+| Multi-factor authentication (MFA) | Authenticator app (TOTP), 10 one-time backup codes; admins can turn it off for someone who has lost theirs |
 | Consent | Required and optional scopes; remembered per app; Keston's own apps can skip it |
-| Account pages | Profile, where you're signed in (sign out other devices), password, two-step, connected apps (remove access) |
+| Account pages | Profile, where you're signed in (sign out other devices), password, MFA, connected apps (remove access) |
 | Operations | Migrations and signing-key creation guarded by Postgres advisory locks, signing-key rotation every 90 days, hourly cleanup, `/healthz` and `/readyz`, JSON logs, graceful shutdown |
 
 Not yet: passkeys (WebAuthn), password reset by email, back-channel logout
@@ -51,7 +51,7 @@ deploy/              apps to register (clients.local.json, clients.json), Caddyf
 | `/.well-known/openid-configuration` | Discovery |
 | `/authorize` | Starts sign-in; sends people to `/sign-in?authRequestID=…` |
 | `/oauth/token`, `/userinfo`, `/keys`, `/revoke`, `/oauth/introspect`, `/end_session` | Standard OIDC |
-| `/sign-in`, `/two-step`, `/consent` | The sign-in pages |
+| `/sign-in`, `/mfa`, `/consent` | The sign-in pages |
 | `/account` | Account pages |
 | `/healthz`, `/readyz` | Liveness, and readiness (database reachable) |
 
@@ -97,8 +97,9 @@ For local testing only (never create it on the live server):
 docker compose run --rm -e KESTON_ID_PASSWORD="correct horse battery" keston-id users create -email ben.smith@keston.school -name "Ben Smith" -organisation "The Keston School"
 ```
 
-It signs in with that email and password, and has two-step verification
-off. If two-step gets turned on and you lose the code, start again with
+It signs in with that email and password, and has MFA
+off. If MFA gets turned on and you lose the code, an admin can turn it off in
+Keston Admin, or start again with
 `docker compose down -v` (this deletes the local database).
 
 Run several replicas behind Caddy, as on the VPS:
@@ -142,7 +143,7 @@ start without a real `KESTON_ID_SECRET_KEY`.
    ports 80 and 443.
 2. Next to `compose.yaml`, copy `.env.live.example` to `.env` and fill it in:
    the secret key, a Postgres password and each app's client secret. Keep
-   the secret key safe and backed up: it decrypts signing keys and two-step
+   the secret key safe and backed up: it decrypts signing keys and MFA
    secrets.
 3. Start it:
 

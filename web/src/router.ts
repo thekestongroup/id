@@ -25,7 +25,8 @@ export const router = createRouter({
       component: () => import('./pages/ChooseAccount.vue'),
       meta: { title: 'Choose an account' },
     },
-    { path: '/two-step', component: () => import('./pages/TwoStep.vue'), meta: { title: "Check it's you" } },
+    { path: '/two-step', redirect: (to) => ({ path: '/mfa', query: to.query }) },
+    { path: '/mfa', component: () => import('./pages/Mfa.vue'), meta: { title: "Check it's you" } },
     { path: '/consent', component: () => import('./pages/Consent.vue'), meta: { title: 'Allow access' } },
     {
       path: '/forgot-password',

@@ -1,4 +1,4 @@
-// Package secret encrypts values kept in the database (signing keys, two-step
+// Package secret encrypts values kept in the database (signing keys, MFA
 // secrets) with AES-256-GCM, and makes and hashes random tokens.
 package secret
 

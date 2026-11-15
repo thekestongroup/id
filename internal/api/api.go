@@ -1,5 +1,5 @@
 // Package api is the JSON API behind the Keston ID web UI: signing in, the
-// two-step code, consent, and account settings. The OAuth/OIDC endpoints
+// MFA code, consent, and account settings. The OAuth/OIDC endpoints
 // themselves are zitadel/oidc's.
 package api
 
@@ -41,7 +41,7 @@ func (a *API) Routes() http.Handler {
 
 	r.Get("/flow", a.flow)
 	r.Post("/sign-in", a.signIn)
-	r.Post("/two-step", a.twoStep)
+	r.Post("/mfa", a.mfa)
 	r.Post("/consent", a.consent)
 	r.Post("/sign-out", a.signOut)
 	r.Get("/accounts", a.accounts)
@@ -58,9 +58,9 @@ func (a *API) Routes() http.Handler {
 		r.Put("/me/picture", a.setPicture)
 		r.Delete("/me/picture", a.removePicture)
 		r.Post("/me/password", a.changePassword)
-		r.Post("/me/two-step/setup", a.twoStepSetup)
-		r.Post("/me/two-step/enable", a.twoStepEnable)
-		r.Post("/me/two-step/disable", a.twoStepDisable)
+		r.Post("/me/mfa/setup", a.mfaSetup)
+		r.Post("/me/mfa/enable", a.mfaEnable)
+		r.Post("/me/mfa/disable", a.mfaDisable)
 	})
 	return r
 }

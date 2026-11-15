@@ -85,6 +85,7 @@ func (a *API) Routes() http.Handler {
 			r.Delete("/users/{userID}/picture", a.removeUserPicture)
 			r.Post("/users/{userID}/reset-password", a.resetPassword)
 			r.Post("/users/{userID}/status", a.setStatus)
+			r.Post("/users/{userID}/mfa/disable", a.disableMFA)
 			r.Get("/apps", a.listApps)
 			r.Put("/apps/{clientID}", a.putApp)
 			r.Delete("/apps/{clientID}", a.deleteApp)
@@ -381,7 +382,7 @@ type userJSON struct {
 	Role          string `json:"role"`
 	PlatformAdmin bool   `json:"platformAdmin"`
 	Status        string `json:"status"`
-	TwoStep       bool   `json:"twoStep"`
+	MFA           bool   `json:"mfa"`
 	Locked        bool   `json:"locked"`
 	CreatedAt     string `json:"createdAt"`
 	PasswordSetAt string `json:"passwordChangedAt"`
@@ -392,7 +393,7 @@ func (a *API) userView(u *store.User) userJSON {
 	name, _, _ := strings.Cut(u.Email, "@")
 	return userJSON{ID: u.ID, Email: u.Email, Username: name, Name: u.Name, Role: u.Role,
 		Avatar:        profile.PictureURL(a.issuer, u.ID, u.PictureUpdatedAt),
-		PlatformAdmin: u.PlatformAdmin, Status: u.Status, TwoStep: u.TOTPEnabled,
+		PlatformAdmin: u.PlatformAdmin, Status: u.Status, MFA: u.TOTPEnabled,
 		Locked:    u.LockedUntil != nil && u.LockedUntil.After(nowFunc()),
 		CreatedAt: u.CreatedAt.Format(timeFormat), PasswordSetAt: u.PasswordChangedAt.Format(timeFormat)}
 }
@@ -817,4 +818,25 @@ func decodeOptional(r *http.Request, v any) error {
 		return nil
 	}
 	return json.NewDecoder(http.MaxBytesReader(nil, r.Body, 64<<10)).Decode(v)
+}
+
+// POST …/users/{id}/mfa/disable: turns off a user's MFA, for when they've
+// lost their authenticator and their backup codes. They then sign in with
+// their password only, and can set MFA up again in their Keston account.
+func (a *API) disableMFA(w http.ResponseWriter, r *http.Request) {
+	u := a.target(w, r)
+	if u == nil {
+		return
+	}
+	if !u.TOTPEnabled {
+		writeError(w, http.StatusConflict, "already_off", u.Name+" doesn't have MFA turned on.")
+		return
+	}
+	if err := a.store.DisableTOTP(r.Context(), u.ID); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	slog.Info("mfa turned off by an admin", "user", u.ID, "organisation", organisation(r).ID, "by", caller(r).ID)
+	updated, _ := a.store.UserByID(r.Context(), u.ID)
+	writeJSON(w, http.StatusOK, a.userView(updated))
 }
