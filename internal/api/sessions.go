@@ -48,7 +48,7 @@ func (a *API) signedIn(r *http.Request) []*current {
 			continue
 		}
 		user, err := a.store.UserByID(r.Context(), sess.UserID)
-		if err != nil || user.Status != "active" {
+		if err != nil || !user.Usable() {
 			continue
 		}
 		out = append(out, &current{session: sess, user: user, token: token})

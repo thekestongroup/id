@@ -33,6 +33,10 @@ type Config struct {
 	DevWebURL string
 	// Allow an http:// issuer (local development only).
 	Insecure bool
+	// The Keston Group's own organisation (the platform organisation), made
+	// at start if it isn't there: its global admins are Keston staff.
+	PlatformName   string
+	PlatformDomain string
 }
 
 func Load() (*Config, error) {
@@ -41,6 +45,8 @@ func Load() (*Config, error) {
 		Addr:            env("KESTON_ID_ADDR", ":4444"),
 		DatabaseURL:     env("KESTON_ID_DATABASE_URL", "postgres://keston:keston@localhost:5432/keston_id?sslmode=disable"),
 		DevWebURL:       os.Getenv("KESTON_ID_DEV_WEB_URL"),
+		PlatformName:    env("KESTON_ID_PLATFORM_NAME", "The Keston Group"),
+		PlatformDomain:  env("KESTON_ID_PLATFORM_DOMAIN", "keston.co"),
 		AccessTokenTTL:  15 * time.Minute,
 		IDTokenTTL:      time.Hour,
 		RefreshTokenTTL: 30 * 24 * time.Hour,

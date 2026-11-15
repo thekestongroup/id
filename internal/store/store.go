@@ -37,7 +37,13 @@ type User struct {
 	OrganisationID string
 	Organisation   string // the organisation's name
 	Role           string // "member" or "global_admin"
-	PlatformAdmin  bool
+	// Keston staff: in the platform organisation (The Keston Group), as a
+	// global admin or marked platform_admin.
+	PlatformAdmin bool
+	// A support account: the Keston staff member it's for (nil: a normal
+	// account), and when it stops working.
+	SupportFor *string
+	ExpiresAt  *time.Time
 	// When the profile picture last changed; nil: no picture.
 	PictureUpdatedAt  *time.Time
 	PasswordHash      string
@@ -54,15 +60,17 @@ type User struct {
 // The organisation's name comes from a subquery, so the same columns work
 // after SELECT … FROM users and after INSERT/UPDATE … RETURNING.
 const userColumns = `id, email, name, organisation_id,
-	(SELECT o.name FROM organisations o WHERE o.id = users.organisation_id) AS organisation_name, role, platform_admin,
-	picture_updated_at,
+	(SELECT o.name FROM organisations o WHERE o.id = users.organisation_id) AS organisation_name, role,
+	(EXISTS (SELECT 1 FROM organisations p WHERE p.id = users.organisation_id AND p.is_platform)
+		AND (platform_admin OR role = 'global_admin')) AS is_platform_admin,
+	support_for, expires_at, picture_updated_at,
 	password_hash, password_changed_at, totp_secret, totp_enabled, backup_codes, status, failed_logins, locked_until,
 	created_at`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.OrganisationID, &u.Organisation, &u.Role, &u.PlatformAdmin,
-		&u.PictureUpdatedAt, &u.PasswordHash, &u.PasswordChangedAt, &u.TOTPSecret, &u.TOTPEnabled, &u.BackupCodes, &u.Status, &u.FailedLogins,
+		&u.SupportFor, &u.ExpiresAt, &u.PictureUpdatedAt, &u.PasswordHash, &u.PasswordChangedAt, &u.TOTPSecret, &u.TOTPEnabled, &u.BackupCodes, &u.Status, &u.FailedLogins,
 		&u.LockedUntil, &u.CreatedAt)
 	if err != nil {
 		return nil, notFound(err)
@@ -85,8 +93,14 @@ type NewUser struct {
 	Email          string
 	Name           string
 	Role           string
-	PlatformAdmin  bool
-	PasswordHash   string
+	// Keston staff: in the platform organisation (The Keston Group), as a
+	// global admin or marked platform_admin.
+	PlatformAdmin bool
+	// A support account: the Keston staff member it's for (nil: a normal
+	// account), and when it stops working.
+	SupportFor   *string
+	ExpiresAt    *time.Time
+	PasswordHash string
 }
 
 func (s *Store) CreateUser(ctx context.Context, q Querier, n NewUser) (*User, error) {
@@ -338,3 +352,11 @@ func (s *Store) SetRole(ctx context.Context, userID, role string) error {
 	_, err := s.DB.Exec(ctx, `UPDATE users SET role = $2, updated_at = now() WHERE id = $1`, userID, role)
 	return err
 }
+
+// Usable: active, and (for a support account) not expired.
+func (u *User) Usable() bool {
+	return u.Status == "active" && (u.ExpiresAt == nil || u.ExpiresAt.After(time.Now()))
+}
+
+// IsSupport: a temporary Keston support account.
+func (u *User) IsSupport() bool { return u.SupportFor != nil }

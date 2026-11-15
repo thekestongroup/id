@@ -2,6 +2,8 @@ package adminapi
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -35,11 +37,18 @@ func (a *API) getSupport(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	var account any
+	if caller(r).PlatformAdmin {
+		if sa, err := a.store.SupportAccount(ctx, org.ID, caller(r).ID); err == nil {
+			account = map[string]any{"email": sa.Email, "expiresAt": sa.ExpiresAt}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"access":    map[string]any{"active": until != nil, "until": until},
-		"requests":  requests,
-		"lockouts":  lockouts,
-		"canManage": a.canManage(ctx, caller(r), org.ID),
+		"supportAccount": account,
+		"access":         map[string]any{"active": until != nil, "until": until},
+		"requests":       requests,
+		"lockouts":       lockouts,
+		"canManage":      a.canManage(ctx, caller(r), org.ID),
 	})
 }
 
@@ -93,8 +102,8 @@ func (a *API) requestSupport(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	a.notifyAdmins(r.Context(), org, "warning", "Keston support is asking for access",
-		u.Name+" from Keston support asked to see "+org.Name+"'s accounts: “"+text+"”. Approve or deny it in Keston Admin.",
+	a.notifyAdmins(r.Context(), org, "info", "Keston support would like access",
+		u.Name+" from Keston support asked for access to "+org.Name+": “"+text+"”. Allow it in Keston Admin, and end it whenever you like.",
 		orgLink(org))
 	slog.Info("support access requested", "organisation", org.ID, "request", id, "by", u.ID)
 	w.WriteHeader(http.StatusCreated)
@@ -105,7 +114,7 @@ func (a *API) requestSupport(w http.ResponseWriter, r *http.Request) {
 func (a *API) decideSupport(w http.ResponseWriter, r *http.Request) {
 	u := caller(r)
 	org := organisation(r)
-	if !isOwnAdmin(u, org.ID) {
+	if !decides(u, org.ID) {
 		writeError(w, http.StatusForbidden, "forbidden", "Only "+org.Name+"'s global admins can decide.")
 		return
 	}
@@ -128,11 +137,11 @@ func (a *API) decideSupport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "decided", "That request has already been decided.")
 		return
 	}
-	verb := "denied"
+	verb := "declined"
 	if approve {
-		verb = fmt.Sprintf("approved for %d days", days)
+		verb = fmt.Sprintf("allowed for %d days", days)
 	}
-	a.notifyAdmins(r.Context(), org, "info", "Keston support access "+verb, u.Name+" "+verb+" Keston support's access.",
+	a.notifyAdmins(r.Context(), org, "info", "Keston support access "+verb, u.Name+" "+verb+" Keston support access.",
 		orgLink(org))
 	slog.Info("support access decided", "organisation", org.ID, "approved", approve, "by", u.ID)
 	w.WriteHeader(http.StatusNoContent)
@@ -142,7 +151,7 @@ func (a *API) decideSupport(w http.ResponseWriter, r *http.Request) {
 func (a *API) revokeSupport(w http.ResponseWriter, r *http.Request) {
 	u := caller(r)
 	org := organisation(r)
-	if !isOwnAdmin(u, org.ID) {
+	if !decides(u, org.ID) {
 		writeError(w, http.StatusForbidden, "forbidden", "Only "+org.Name+"'s global admins can end it.")
 		return
 	}
@@ -193,7 +202,7 @@ func (a *API) decideLockout(w http.ResponseWriter, r *http.Request) {
 	u := caller(r)
 	org := organisation(r)
 	decision := chi.URLParam(r, "decision")
-	if decision == "deny" && !isOwnAdmin(u, org.ID) {
+	if decision == "deny" && !decides(u, org.ID) {
 		writeError(w, http.StatusForbidden, "forbidden", "Only "+org.Name+"'s global admins can deny it.")
 		return
 	}
@@ -220,6 +229,16 @@ func (a *API) decideLockout(w http.ResponseWriter, r *http.Request) {
 // Housekeeping finishes lockout requests nobody denied, and says so. Run
 // regularly (every replica may; each request completes once).
 func (a *API) Housekeeping(ctx context.Context) {
+	if err := a.store.DeleteExpiredSupportAccounts(ctx); err != nil {
+		slog.Warn("support account housekeeping", "error", err)
+	}
+	if names, err := a.store.DeleteDueOrganisations(ctx); err != nil {
+		slog.Warn("organisation deletion", "error", err)
+	} else {
+		for _, n := range names {
+			slog.Info("organisation deleted after 14 days", "organisation", n)
+		}
+	}
 	done, err := a.store.CompleteDueLockouts(ctx)
 	if err != nil {
 		slog.Warn("lockout housekeeping", "error", err)
@@ -230,7 +249,7 @@ func (a *API) Housekeeping(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		a.notifyAdmins(ctx, org, "warning", "Keston support now has access",
+		a.notifyAdmins(ctx, org, "info", "Keston support now has access",
 			"Nobody denied the organisation lockout request, so Keston support can now restore access to "+
 				org.Name+" for 7 days. A global admin can end it at any time.", orgLink(org))
 		if d.RequestedBy != nil {
@@ -264,6 +283,97 @@ func (a *API) clearNotifications(w http.ResponseWriter, r *http.Request) {
 	if err := a.store.DeleteNotifications(r.Context(), caller(r).ID); err != nil {
 		serverError(w, r, err)
 		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── Opening a support account ────────────────────────────────────────────
+
+// HandoffTTL is how long the link from Keston Admin to Keston ID works.
+const HandoffTTL = 60 * time.Second
+
+// Handoff is what Keston ID needs to open a support account, sealed (with
+// KESTON_ID_SECRET_KEY) so only Keston ID can read it.
+type Handoff struct {
+	SupportUser string `json:"s"`
+	Staff       string `json:"f"`
+	Org         string `json:"o"`
+	Expires     int64  `json:"e"`
+}
+
+// POST …/support/open: Keston staff open their support account in this
+// organisation. Returns a Keston ID link that signs the browser in to it
+// (alongside their own account), then back to Keston Admin as it.
+func (a *API) openSupportAccount(w http.ResponseWriter, r *http.Request) {
+	u := caller(r)
+	org := organisation(r)
+	if !u.PlatformAdmin {
+		writeError(w, http.StatusForbidden, "forbidden", "Only Keston support has support accounts.")
+		return
+	}
+	sa, err := a.store.SupportAccount(r.Context(), org.ID, u.ID)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "support_access",
+			org.Name+" hasn't allowed support access, or it has ended.")
+		return
+	}
+	raw, _ := json.Marshal(Handoff{SupportUser: sa.ID, Staff: u.ID, Org: org.ID,
+		Expires: time.Now().Add(HandoffTTL).Unix()})
+	token := base64.RawURLEncoding.EncodeToString(a.store.Box.Seal(raw))
+	slog.Info("support account opened", "organisation", org.ID, "support_user", sa.ID, "by", u.ID)
+	writeJSON(w, http.StatusOK, map[string]string{"url": a.issuer + "/support-sign-in?token=" + token})
+}
+
+// ── Deleting an organisation ─────────────────────────────────────────────
+
+// POST …/deletion {confirm}: one of its global admins schedules it. It's
+// deleted in 14 days, unless a global admin signs in before then.
+func (a *API) scheduleDeletion(w http.ResponseWriter, r *http.Request) {
+	u := caller(r)
+	org := organisation(r)
+	if !decides(u, org.ID) {
+		writeError(w, http.StatusForbidden, "forbidden", "Only "+org.Name+"'s global admins can delete it.")
+		return
+	}
+	if org.IsPlatform {
+		writeError(w, http.StatusConflict, "platform", "The Keston Group's organisation can't be deleted.")
+		return
+	}
+	var body struct {
+		Confirm string `json:"confirm"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Confirm) != org.Name {
+		writeFieldError(w, "confirm", "Type the organisation's name exactly, to confirm")
+		return
+	}
+	after, err := a.store.ScheduleDeletion(r.Context(), org.ID, u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	a.notifyAdmins(r.Context(), org, "warning", org.Name+" will be deleted",
+		fmt.Sprintf("%s asked to delete %s. It and all its users will be deleted on %s, unless a global admin signs in before then.",
+			u.Name, org.Name, after.Format("2 January 2006")), orgLink(org))
+	slog.Info("organisation deletion scheduled", "organisation", org.ID, "after", after, "by", u.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"deleteAfter": after})
+}
+
+func (a *API) cancelDeletion(w http.ResponseWriter, r *http.Request) {
+	u := caller(r)
+	org := organisation(r)
+	if !decides(u, org.ID) {
+		writeError(w, http.StatusForbidden, "forbidden", "Only "+org.Name+"'s global admins can cancel it.")
+		return
+	}
+	if ok, err := a.store.CancelDeletion(r.Context(), org.ID); err != nil {
+		serverError(w, r, err)
+		return
+	} else if ok {
+		a.notifyAdmins(r.Context(), org, "info", "Deletion cancelled", u.Name+" cancelled deleting "+org.Name+".",
+			orgLink(org))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

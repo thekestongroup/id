@@ -190,12 +190,19 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 			"Too many attempts. Wait 15 minutes, or reset your password.")
 		return
 	}
+	// Support accounts have no password: they're only opened by Keston staff
+	// from their own account (see SupportSignIn).
+	if user.IsSupport() {
+		secret.DummyCheck(body.Password)
+		writeFieldError(w, "password", "Incorrect email or password")
+		return
+	}
 	ok, err := secret.CheckPassword(user.PasswordHash, body.Password)
 	if err != nil {
 		serverError(w, r, err)
 		return
 	}
-	if !ok || user.Status != "active" {
+	if !ok || !user.Usable() {
 		_ = a.store.RecordLogin(ctx, user.ID, false)
 		writeFieldError(w, "password", "Incorrect email or password")
 		return
@@ -211,6 +218,9 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		serverError(w, r, err)
 		return
+	}
+	if stage == "verified" {
+		a.signedInFully(ctx, user)
 	}
 	// Added to this browser's signed-in accounts, as the active one.
 	a.addSession(w, r, token, user.ID)
@@ -276,6 +286,7 @@ func (a *API) mfa(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cur.session = sess
+	a.signedInFully(ctx, cur.user)
 	a.respondNext(w, r, cur, body.AuthRequestID)
 }
 

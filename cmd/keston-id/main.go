@@ -74,6 +74,10 @@ func run(args []string) error {
 		return err
 	}
 	st := store.New(pool, box)
+	// There's always an organisation for The Keston Group (Keston staff).
+	if _, err := st.EnsurePlatformOrganisation(ctx, cfg.PlatformName, cfg.PlatformDomain); err != nil {
+		return fmt.Errorf("platform organisation: %w", err)
+	}
 
 	cmd := "serve"
 	if len(args) > 0 {
@@ -116,6 +120,9 @@ func serve(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, st *stor
 	if err := ensureKey(); err != nil {
 		return fmt.Errorf("signing key: %w", err)
 	}
+	// Housekeeping once now (then hourly): deletions due, expired support
+	// accounts, lockout requests that went through.
+	adminapi.New(st, nil, cfg.Issuer).Housekeeping(ctx)
 
 	handler, err := server.New(cfg, st, storage, web.Dist())
 	if err != nil {

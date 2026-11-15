@@ -72,6 +72,9 @@ func (a *API) Routes() http.Handler {
 		r.Post("/support/revoke", a.revokeSupport)
 		r.Post("/lockout", a.startLockout)
 		r.Post("/lockout/{lockoutID}/{decision:deny|cancel}", a.decideLockout)
+		r.Post("/support/open", a.openSupportAccount)
+		r.Post("/deletion", a.scheduleDeletion)
+		r.Delete("/deletion", a.cancelDeletion)
 
 		// Its accounts and settings: its global admins, or Keston support
 		// while a global admin has approved support access.
@@ -132,7 +135,7 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 			return
 		}
 		user, err := a.store.UserByID(r.Context(), claims.Subject)
-		if err != nil || user.Status != "active" {
+		if err != nil || !user.Usable() {
 			writeError(w, http.StatusUnauthorized, "signed_out", "Your session has ended. Sign in again.")
 			return
 		}
@@ -145,22 +148,21 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// isOwnAdmin: a global admin of this organisation.
+// isOwnAdmin: a global admin of this organisation (including a Keston
+// support account in it, while access lasts).
 func isOwnAdmin(u *store.User, orgID string) bool {
 	return u.Role == "global_admin" && u.OrganisationID == orgID
 }
 
-// canManage: an organisation's global admins, and Keston support (platform
-// admins) only while support access is approved.
-func (a *API) canManage(ctx context.Context, u *store.User, orgID string) bool {
-	if isOwnAdmin(u, orgID) {
-		return true
-	}
-	if !u.PlatformAdmin {
-		return false
-	}
-	until, err := a.store.SupportAccess(ctx, orgID)
-	return err == nil && until != nil
+// decides: one of the organisation's own global admins, who decide about
+// support access and deletion (not a Keston support account).
+func decides(u *store.User, orgID string) bool { return isOwnAdmin(u, orgID) && !u.IsSupport() }
+
+// canManage: the organisation's global admins. Keston support manages an
+// organisation's users only through a support account in it, which the
+// organisation allows (see support.go).
+func (a *API) canManage(_ context.Context, u *store.User, orgID string) bool {
+	return isOwnAdmin(u, orgID)
 }
 
 // requireView: platform admins see every organisation's details (not its
@@ -186,7 +188,7 @@ func (a *API) requireManage(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.canManage(r.Context(), caller(r), organisation(r).ID) {
 			writeError(w, http.StatusForbidden, "support_access",
-				"You need support access, approved by one of "+organisation(r).Name+"'s global admins.")
+				"To see "+organisation(r).Name+"'s users, open your support account for it. One of its global admins needs to allow support access first.")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -387,12 +389,16 @@ type userJSON struct {
 	CreatedAt     string `json:"createdAt"`
 	PasswordSetAt string `json:"passwordChangedAt"`
 	Avatar        string `json:"avatar,omitempty"`
+	// A temporary Keston support account, and when it ends.
+	Support   bool       `json:"support"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
 func (a *API) userView(u *store.User) userJSON {
 	name, _, _ := strings.Cut(u.Email, "@")
 	return userJSON{ID: u.ID, Email: u.Email, Username: name, Name: u.Name, Role: u.Role,
-		Avatar:        profile.PictureURL(a.issuer, u.ID, u.PictureUpdatedAt),
+		Avatar:  profile.PictureURL(a.issuer, u.ID, u.PictureUpdatedAt),
+		Support: u.IsSupport(), ExpiresAt: u.ExpiresAt,
 		PlatformAdmin: u.PlatformAdmin, Status: u.Status, MFA: u.TOTPEnabled,
 		Locked:    u.LockedUntil != nil && u.LockedUntil.After(nowFunc()),
 		CreatedAt: u.CreatedAt.Format(timeFormat), PasswordSetAt: u.PasswordChangedAt.Format(timeFormat)}
@@ -460,6 +466,13 @@ func (a *API) target(w http.ResponseWriter, r *http.Request) *store.User {
 	u, err := a.store.UserByID(r.Context(), chi.URLParam(r, "userID"))
 	if err != nil || u.OrganisationID != organisation(r).ID {
 		writeError(w, http.StatusNotFound, "not_found", "That user doesn't exist.")
+		return nil
+	}
+	// Support accounts come and go with support access; they can't be edited,
+	// given a password, or changed here.
+	if u.IsSupport() && r.Method != http.MethodGet {
+		writeError(w, http.StatusConflict, "support_account",
+			"This is a Keston support account. It ends with support access (Overview).")
 		return nil
 	}
 	return u

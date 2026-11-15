@@ -65,6 +65,8 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 	})
 
 	r.Mount("/api", a.Routes())
+	// Opening a Keston support account, from Keston Admin.
+	r.Get("/support-sign-in", a.SupportSignIn)
 
 	// Profile pictures, for Keston ID, Keston Admin and apps (the userinfo
 	// "picture" claim). The ?v= in their URLs changes with the picture, so

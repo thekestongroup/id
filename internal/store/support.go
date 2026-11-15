@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/thekestongroup/id/internal/secret"
 )
 
 // LockoutWait is how long global admins have to deny a lockout request.
@@ -65,6 +68,12 @@ func (s *Store) CompleteDueLockouts(ctx context.Context) ([]LockoutDone, error) 
 			d.OrganisationID, d.RequestedBy, d.Reason, SupportAccessFor); err != nil {
 			return nil, err
 		}
+		if d.RequestedBy != nil {
+			if err := createSupportAccount(ctx, tx, d.OrganisationID, *d.RequestedBy,
+				time.Now().Add(SupportAccessFor)); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return done, tx.Commit(ctx)
 }
@@ -116,17 +125,36 @@ func (s *Store) DecideSupport(ctx context.Context, orgID, requestID, userID stri
 		status = "approved"
 		expires = time.Now().Add(duration)
 	}
-	tag, err := s.DB.Exec(ctx, `UPDATE support_requests SET status = $4, decided_by = $3, decided_at = now(),
-		expires_at = $5 WHERE id = $2 AND organisation_id = $1 AND status = 'pending'`,
-		orgID, requestID, userID, status, expires)
-	return tag.RowsAffected() == 1, err
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	var requester *string
+	err = tx.QueryRow(ctx, `UPDATE support_requests SET status = $4, decided_by = $3, decided_at = now(),
+		expires_at = $5 WHERE id = $2 AND organisation_id = $1 AND status = 'pending' RETURNING requested_by`,
+		orgID, requestID, userID, status, expires).Scan(&requester)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if approve && requester != nil {
+		if err := createSupportAccount(ctx, tx, orgID, *requester, time.Now().Add(duration)); err != nil {
+			return false, err
+		}
+	}
+	return true, tx.Commit(ctx)
 }
 
 // RevokeSupport ends every approved support access now.
 func (s *Store) RevokeSupport(ctx context.Context, orgID, userID string) error {
-	_, err := s.DB.Exec(ctx, `UPDATE support_requests SET status = 'revoked', decided_by = $2, decided_at = now()
-		WHERE organisation_id = $1 AND status = 'approved' AND expires_at > now()`, orgID, userID)
-	return err
+	if _, err := s.DB.Exec(ctx, `UPDATE support_requests SET status = 'revoked', decided_by = $2, decided_at = now()
+		WHERE organisation_id = $1 AND status = 'approved' AND expires_at > now()`, orgID, userID); err != nil {
+		return err
+	}
+	return s.DeleteSupportAccounts(ctx, orgID)
 }
 
 const lockoutColumns = `r.id, r.requested_by, (SELECT u.name FROM users u WHERE u.id = r.requested_by), r.reason,
@@ -226,3 +254,45 @@ func (s *Store) DeleteNotifications(ctx context.Context, userID string) error {
 
 // ErrPending: there's already a pending request of this kind.
 var ErrPending = errors.New("already pending")
+
+// ── Support accounts ─────────────────────────────────────────────────────
+
+// createSupportAccount gives a Keston staff member a temporary account in an
+// organisation, as a global admin there, until `until`. Its password is
+// random and never shown: it's only opened from the staff member's own
+// account. With one already there, it just lasts longer.
+func createSupportAccount(ctx context.Context, q interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}, orgID, staffID string, until time.Time) error {
+	_, err := q.Exec(ctx, `
+		WITH staff AS (SELECT name FROM users WHERE id = $2),
+		     org AS (SELECT domain FROM organisations WHERE id = $1)
+		INSERT INTO users (organisation_id, email, name, role, password_hash, support_for, expires_at)
+		SELECT $1, 'keston-support-' || substr(md5($2::text), 1, 8) || '@' || org.domain,
+		       staff.name || ' (Keston support)', 'global_admin', $3, $2, $4
+		FROM staff, org
+		ON CONFLICT (lower(email)) DO UPDATE SET expires_at = greatest(users.expires_at, $4), status = 'active'`,
+		orgID, staffID, "!support-account-no-password:"+secret.Token(), until)
+	return err
+}
+
+// SupportAccount is a staff member's usable support account in an
+// organisation, if they have one.
+func (s *Store) SupportAccount(ctx context.Context, orgID, staffID string) (*User, error) {
+	u, err := scanUser(s.DB.QueryRow(ctx, `SELECT `+userColumns+` FROM users
+		WHERE organisation_id = $1 AND support_for = $2 AND status = 'active' AND expires_at > now()`, orgID, staffID))
+	return u, err
+}
+
+// DeleteSupportAccounts removes an organisation's support accounts (access
+// ended), which also signs them out of everything.
+func (s *Store) DeleteSupportAccounts(ctx context.Context, orgID string) error {
+	_, err := s.DB.Exec(ctx, `DELETE FROM users WHERE organisation_id = $1 AND support_for IS NOT NULL`, orgID)
+	return err
+}
+
+// DeleteExpiredSupportAccounts tidies up support accounts past their time.
+func (s *Store) DeleteExpiredSupportAccounts(ctx context.Context) error {
+	_, err := s.DB.Exec(ctx, `DELETE FROM users WHERE support_for IS NOT NULL AND expires_at <= now()`)
+	return err
+}

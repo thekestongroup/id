@@ -18,15 +18,23 @@ type Organisation struct {
 	ProfileEditing ProfileEditing `json:"profileEditing"`
 	UserCount      int            `json:"userCount"`
 	CreatedAt      time.Time      `json:"createdAt"`
+	// The Keston Group's own organisation: can't be deleted.
+	IsPlatform bool `json:"isPlatform"`
+	// Deletion scheduled: it goes at DeleteAfter unless a global admin signs
+	// in first.
+	DeletionRequestedAt *time.Time `json:"deletionRequestedAt,omitempty"`
+	DeleteAfter         *time.Time `json:"deleteAfter,omitempty"`
 }
 
 const orgColumns = `id, name, domain, password_policy, profile_editing,
-	(SELECT count(*) FROM users u WHERE u.organisation_id = organisations.id), created_at`
+	(SELECT count(*) FROM users u WHERE u.organisation_id = organisations.id AND u.support_for IS NULL), created_at,
+	is_platform, deletion_requested_at, delete_after`
 
 func scanOrganisation(row pgx.Row) (*Organisation, error) {
 	var o Organisation
 	var raw, editing []byte
-	if err := row.Scan(&o.ID, &o.Name, &o.Domain, &raw, &editing, &o.UserCount, &o.CreatedAt); err != nil {
+	if err := row.Scan(&o.ID, &o.Name, &o.Domain, &raw, &editing, &o.UserCount, &o.CreatedAt, &o.IsPlatform,
+		&o.DeletionRequestedAt, &o.DeleteAfter); err != nil {
 		return nil, notFound(err)
 	}
 	if err := json.Unmarshal(raw, &o.PasswordPolicy); err != nil {
@@ -40,7 +48,7 @@ func scanOrganisation(row pgx.Row) (*Organisation, error) {
 }
 
 func (s *Store) Organisations(ctx context.Context) ([]Organisation, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+orgColumns+` FROM organisations ORDER BY name`)
+	rows, err := s.DB.Query(ctx, `SELECT `+orgColumns+` FROM organisations ORDER BY is_platform DESC, name`)
 	if err != nil {
 		return nil, err
 	}
@@ -133,4 +141,70 @@ func (s *Store) SetProfileEditing(ctx context.Context, orgID string, p ProfileEd
 	}
 	_, err = s.DB.Exec(ctx, `UPDATE organisations SET profile_editing = $2, updated_at = now() WHERE id = $1`, orgID, raw)
 	return err
+}
+
+// ── The platform organisation (The Keston Group) ─────────────────────────
+
+// EnsurePlatformOrganisation makes sure The Keston Group's organisation
+// exists (there must always be one): marks the organisation with this
+// domain, or creates it (with no users yet).
+func (s *Store) EnsurePlatformOrganisation(ctx context.Context, name, domain string) (*Organisation, error) {
+	var id string
+	err := s.DB.QueryRow(ctx, `SELECT id FROM organisations WHERE is_platform`).Scan(&id)
+	if err == nil {
+		return s.OrganisationByID(ctx, id)
+	}
+	if err := s.DB.QueryRow(ctx, `INSERT INTO organisations (name, domain, is_platform) VALUES ($1, lower($2), TRUE)
+		ON CONFLICT (lower(domain)) DO UPDATE SET is_platform = TRUE RETURNING id`, name, domain).Scan(&id); err != nil {
+		return nil, err
+	}
+	return s.OrganisationByID(ctx, id)
+}
+
+// ── Deleting an organisation ─────────────────────────────────────────────
+
+// DeletionWait is how long a deletion waits, so a mistake (or someone who
+// shouldn't) can be undone by a global admin signing in.
+const DeletionWait = 14 * 24 * time.Hour
+
+func (s *Store) ScheduleDeletion(ctx context.Context, orgID, userID string) (time.Time, error) {
+	var after time.Time
+	err := s.DB.QueryRow(ctx, `UPDATE organisations SET deletion_requested_at = now(), deletion_requested_by = $2,
+		delete_after = now() + $3::interval WHERE id = $1 AND NOT is_platform RETURNING delete_after`,
+		orgID, userID, DeletionWait).Scan(&after)
+	return after, notFound(err)
+}
+
+// CancelDeletion: returns whether a deletion was waiting.
+func (s *Store) CancelDeletion(ctx context.Context, orgID string) (bool, error) {
+	tag, err := s.DB.Exec(ctx, `UPDATE organisations SET deletion_requested_at = NULL, deletion_requested_by = NULL,
+		delete_after = NULL WHERE id = $1 AND delete_after IS NOT NULL`, orgID)
+	return tag.RowsAffected() == 1, err
+}
+
+// DeleteDueOrganisations deletes organisations whose 14 days are up: their
+// users (and so their sessions, tokens and grants) first, then the rest.
+func (s *Store) DeleteDueOrganisations(ctx context.Context) ([]string, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT name FROM organisations
+		WHERE delete_after <= now() AND NOT is_platform FOR UPDATE SKIP LOCKED`)
+	if err != nil {
+		return nil, err
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil || len(names) == 0 {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE organisation_id IN
+		(SELECT id FROM organisations WHERE delete_after <= now() AND NOT is_platform)`); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM organisations WHERE delete_after <= now() AND NOT is_platform`); err != nil {
+		return nil, err
+	}
+	return names, tx.Commit(ctx)
 }
