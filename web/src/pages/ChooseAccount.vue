@@ -61,7 +61,8 @@ function useAnother() {
           <p v-else class="text-base">Signed in to this browser</p>
         </div>
 
-        <ul class="flex flex-col divide-y divide-black/10 rounded border border-black/15" aria-label="Signed-in accounts">
+        <!-- overflow-hidden: the rows' hover background follows the rounded corners. -->
+        <ul class="flex flex-col divide-y divide-black/10 overflow-hidden rounded border border-black/15" aria-label="Signed-in accounts">
           <li v-for="account in accounts" :key="account.id">
             <button
               type="button"
