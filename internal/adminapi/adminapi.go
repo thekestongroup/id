@@ -108,6 +108,14 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermSettings)).Put("/settings", a.putSettings)
 		r.With(a.need(store.PermPolicy)).Get("/password-policy", a.getPolicy)
 		r.With(a.need(store.PermPolicy)).Put("/password-policy", a.putPolicy)
+		// Sign-in requirements and access passes (signin.go).
+		r.With(a.need(store.PermPolicy)).Get("/mfa-policy", a.getMFAPolicy)
+		r.With(a.need(store.PermPolicy)).Put("/mfa-policy", a.putMFAPolicy)
+		r.With(a.need(store.PermPolicy)).Put("/mfa-policy/groups/{groupID}", a.putGroupMFAPolicy)
+		r.With(a.need(store.PermViewUsers)).Get("/users/{userID}/sign-in", a.getSignIn)
+		r.With(a.need(store.PermResetPassword)).Post("/users/{userID}/require-password-change", a.requirePasswordChange)
+		r.With(a.need(store.PermAccessPass)).Post("/users/{userID}/access-passes", a.createAccessPass)
+		r.With(a.need(store.PermAccessPass)).Delete("/users/{userID}/access-passes/{passID}", a.revokeAccessPass)
 	})
 
 	return r
@@ -508,6 +516,8 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Role     string `json:"role"`
+		// They choose their own password when they first sign in (default on).
+		RequirePasswordChange *bool `json:"requirePasswordChange"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -544,6 +554,12 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		serverError(w, r, err)
 		return
+	}
+	if body.RequirePasswordChange == nil || *body.RequirePasswordChange {
+		if err := a.store.SetPasswordChangeRequired(r.Context(), created.ID, true); err != nil {
+			serverError(w, r, err)
+			return
+		}
 	}
 	slog.Info("account created", "user", created.ID, "organisation", org.ID, "by", caller(r).ID)
 	writeJSON(w, http.StatusCreated, a.userView(created))
@@ -586,6 +602,8 @@ func (a *API) resetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Password string `json:"password"`
+		// They choose their own password at their next sign-in (default on).
+		RequirePasswordChange *bool `json:"requirePasswordChange"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -595,6 +613,11 @@ func (a *API) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.ResetPassword(r.Context(), u.ID, secret.HashPassword(body.Password)); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if err := a.store.SetPasswordChangeRequired(r.Context(), u.ID,
+		body.RequirePasswordChange == nil || *body.RequirePasswordChange); err != nil {
 		serverError(w, r, err)
 		return
 	}

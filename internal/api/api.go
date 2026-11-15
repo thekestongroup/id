@@ -41,6 +41,10 @@ func (a *API) Routes() http.Handler {
 	r.Get("/flow", a.flow)
 	r.Post("/sign-in", a.signIn)
 	r.Post("/mfa", a.mfa)
+	r.Post("/sign-in/access-pass", a.signInWithPass)
+	r.Post("/required/password", a.requiredPassword)
+	r.Post("/required/mfa/setup", a.requiredMFASetup)
+	r.Post("/required/mfa/enable", a.requiredMFAEnable)
 	r.Post("/consent", a.consent)
 	r.Post("/sign-out", a.signOut)
 	r.Get("/accounts", a.accounts)
@@ -96,6 +100,13 @@ type current struct {
 func (a *API) requireVerified(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cur := a.current(r)
+		if cur != nil {
+			// An admin may have required something since (required.go).
+			if _, err := a.settle(r.Context(), cur); err != nil {
+				serverError(w, r, err)
+				return
+			}
+		}
 		if cur == nil || cur.session.Stage != "verified" {
 			writeError(w, http.StatusUnauthorized, "signed_out", "Sign in to continue.")
 			return
