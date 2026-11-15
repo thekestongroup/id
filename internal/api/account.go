@@ -45,7 +45,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		"permissions":   principal.From(r.Context()).Perms.List(),
 		"platformAdmin": u.PlatformAdmin,
 		"username":      username(cur.user.Email),
-		"domain":   org.Domain,
+		"domain":        org.Domain,
 		// What this person may change themselves (their organisation decides).
 		"editable": org.ProfileEditing,
 		"security": map[string]any{

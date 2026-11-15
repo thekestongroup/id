@@ -129,7 +129,6 @@ func organisation(r *http.Request) *store.Organisation {
 	return r.Context().Value(orgKey).(*store.Organisation)
 }
 
-
 // isOwnAdmin: a global admin of this organisation (including a Keston
 // support account in it, while access lasts).
 func isOwnAdmin(u *store.User, orgID string) bool {
@@ -241,7 +240,6 @@ const domainHelp = "Enter a domain like greenfield.sch.uk, without https:// or w
 const usernameHelp = "Use lowercase letters, numbers, dots, dashes or underscores, like j.smith"
 
 // ── Handlers: you and the rules ──────────────────────────────────────────
-
 
 // The baseline rules, for a new organisation (which has no rules of its own yet).
 func (a *API) baselineRules(w http.ResponseWriter, _ *http.Request) {
