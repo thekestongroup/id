@@ -27,7 +27,8 @@ type Organisation struct {
 }
 
 const orgColumns = `id, name, domain, password_policy, profile_editing,
-	(SELECT count(*) FROM users u WHERE u.organisation_id = organisations.id AND u.support_for IS NULL), created_at,
+	(SELECT count(*) FROM users u WHERE u.organisation_id = organisations.id AND u.support_for IS NULL
+		AND u.status <> 'deleted'), created_at,
 	is_platform, deletion_requested_at, delete_after`
 
 func scanOrganisation(row pgx.Row) (*Organisation, error) {

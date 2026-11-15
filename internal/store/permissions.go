@@ -33,6 +33,7 @@ const (
 	PermResetPassword = "users.reset_password"
 	PermResetMFA      = "users.mfa"
 	PermUserStatus    = "users.status"
+	PermDeleteUsers   = "users.delete"
 	PermGroups        = "groups.manage"
 	PermAssign        = "permissions.assign"
 	PermApps          = "apps.manage"
@@ -48,6 +49,7 @@ var Permissions = []Permission{
 	{PermResetPassword, "Reset passwords", "Set a new password, which also unlocks them and signs them out."},
 	{PermResetMFA, "Turn off MFA", "For someone who's lost their authenticator."},
 	{PermUserStatus, "Disable and enable users", "A disabled user can't sign in."},
+	{PermDeleteUsers, "Delete users", "And restore them from Deleted users within 30 days."},
 	{PermGroups, "Manage groups", "Create, rename and delete groups, and choose who's in them."},
 	{PermAssign, "Give permissions", "Set a group's permissions, and who's in it, up to their own permissions."},
 	{PermApps, "Set app access", "Which apps users have (Apps)."},
@@ -56,8 +58,8 @@ var Permissions = []Permission{
 }
 
 // needsView: permissions that act on users, which need seeing them too.
-var needsView = []string{PermCreateUsers, PermEditUsers, PermResetPassword, PermResetMFA, PermUserStatus, PermGroups,
-	PermAssign}
+var needsView = []string{PermCreateUsers, PermEditUsers, PermResetPassword, PermResetMFA, PermUserStatus, PermDeleteUsers,
+	PermGroups, PermAssign}
 
 // CleanPermissions keeps known permissions only, sorted, adding "See users"
 // where another one needs it.

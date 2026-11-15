@@ -138,7 +138,7 @@ func (a *API) deleteGroup(w http.ResponseWriter, r *http.Request) {
 // change.
 func (a *API) member(w http.ResponseWriter, r *http.Request) *store.User {
 	u, err := a.store.UserByID(r.Context(), chi.URLParam(r, "userID"))
-	if err != nil || u.OrganisationID != organisation(r).ID || u.IsSupport() {
+	if err != nil || u.OrganisationID != organisation(r).ID || u.IsSupport() || u.Status == "deleted" {
 		writeError(w, http.StatusNotFound, "not_found", "That user doesn't exist.")
 		return nil
 	}
