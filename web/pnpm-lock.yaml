@@ -12,8 +12,8 @@ importers:
         specifier: ^1.68.0
         version: 1.72.0(vue@3.5.45(typescript@6.0.3))
       '@thekestongroup/ui':
-        specifier: ^0.4.0
-        version: 0.4.0(@floating-ui/dom@1.8.0)(vue@3.5.45(typescript@6.0.3))
+        specifier: ^0.5.0
+        version: 0.5.0(@floating-ui/dom@1.8.0)(vue@3.5.45(typescript@6.0.3))
       vue:
         specifier: ^3.5.44
         version: 3.5.45(typescript@6.0.3)
@@ -336,8 +336,8 @@ packages:
     peerDependencies:
       vue: ^2.7.0 || ^3.0.0
 
-  '@thekestongroup/ui@0.4.0':
-    resolution: {integrity: sha512-upXbpr4El/NOsTHW+zqOHKu6tfTLzl4dKGi6GHllAXToAa1X48QaDrnrlwS36Ceqy7/N9kD5wrIpSYUqNkA7gQ==}
+  '@thekestongroup/ui@0.5.0':
+    resolution: {integrity: sha512-V4yk4PQyWUsyN+jPR8LbITJJySqZCPL9BYYMiJmm47GPO2ukI8ykobmSLk7oilu54mJlsX9NI7PiGfa4kEArow==}
     peerDependencies:
       vue: ^3.5.0
 
@@ -1050,7 +1050,7 @@ snapshots:
       '@tanstack/virtual-core': 3.19.11
       vue: 3.5.45(typescript@6.0.3)
 
-  '@thekestongroup/ui@0.4.0(@floating-ui/dom@1.8.0)(vue@3.5.45(typescript@6.0.3))':
+  '@thekestongroup/ui@0.5.0(@floating-ui/dom@1.8.0)(vue@3.5.45(typescript@6.0.3))':
     dependencies:
       '@fontsource/lato': 5.3.0
       '@internationalized/date': 3.12.4

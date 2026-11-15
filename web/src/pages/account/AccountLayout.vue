@@ -28,6 +28,7 @@ const nav = computed<SidebarSection[]>(() => [
   <AppShell
     v-if="me"
     title="Keston ID"
+    title-to="/account"
     :sections="nav"
     :user="me.user"
     :link-component="RouterLink"
