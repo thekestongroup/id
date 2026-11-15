@@ -29,6 +29,11 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	passkeys, err := a.store.PasskeyCount(r.Context(), cur.user.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user":     a.viewUser(cur.user),
 		"username": username(cur.user.Email),
@@ -36,7 +41,10 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		// What this person may change themselves (their organisation decides).
 		"editable": org.ProfileEditing,
 		"security": map[string]any{
-			"mfa":               cur.user.TOTPEnabled,
+			// MFA is on with an authenticator app or any passkey.
+			"mfa":               cur.user.TOTPEnabled || passkeys > 0,
+			"authenticatorApp":  cur.user.TOTPEnabled,
+			"passkeys":          passkeys,
 			"backupCodesLeft":   len(cur.user.BackupCodes),
 			"passwordChangedAt": cur.user.PasswordChangedAt,
 			"passwordRules":     a.store.PolicyFor(r.Context(), cur.user.OrganisationID).Rules(),

@@ -25,6 +25,8 @@ type flowResponse struct {
 		Optional []ScopeInfo `json:"optional"`
 	} `json:"scopes,omitempty"`
 	User *userView `json:"user,omitempty"`
+	// At the MFA step: the ways this account can do it.
+	MFA *mfaMethods `json:"mfa,omitempty"`
 }
 
 // next works out where someone goes from here: the heart of the sign-in flow.
@@ -44,6 +46,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 			res.Step = "sign-in"
 		case cur.session.Stage == "password":
 			res.Step = "mfa"
+			res.MFA = a.mfaMethodsFor(ctx, cur.user)
 		default:
 			res.Step = "account"
 		}
@@ -91,6 +94,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 	}
 	if cur.session.Stage == "password" {
 		res.Step = "mfa"
+		res.MFA = a.mfaMethodsFor(ctx, cur.user)
 		return res, 0, ""
 	}
 	// Turned off for them by their organisation (Keston Admin → Apps).
@@ -216,8 +220,14 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = a.store.RecordLogin(ctx, user.ID, true)
 
+	// MFA next, if they have it: an authenticator app, or a passkey.
 	stage := "verified"
-	if user.TOTPEnabled {
+	hasMFA, err := a.store.HasMFA(ctx, user)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if hasMFA {
 		stage = "password"
 	}
 	token, sess, err := a.store.CreateSession(ctx, user.ID, stage, []string{"pwd"}, r.UserAgent(), clientIP(r),
@@ -268,7 +278,7 @@ func (a *API) mfa(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ok = used
-	} else if cur.user.TOTPSecret != nil {
+	} else if cur.user.TOTPEnabled && cur.user.TOTPSecret != nil {
 		key, err := a.store.Box.Open(cur.user.TOTPSecret)
 		if err != nil {
 			serverError(w, r, err)

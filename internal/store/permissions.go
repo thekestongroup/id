@@ -46,7 +46,7 @@ var Permissions = []Permission{
 	{PermCreateUsers, "Add users", "New users, as members (not global admins)."},
 	{PermEditUsers, "Edit users", "Names, usernames and profile pictures."},
 	{PermResetPassword, "Reset passwords", "Set a new password, which also unlocks them and signs them out."},
-	{PermResetMFA, "Turn off MFA", "For someone who's lost their authenticator."},
+	{PermResetMFA, "Turn off MFA", "For someone who's lost their authenticator or passkeys. Also removes their passkeys."},
 	{PermUserStatus, "Disable and enable users", "A disabled user can't sign in."},
 	{PermGroups, "Manage groups", "Create, rename and delete groups, and choose who's in them."},
 	{PermAssign, "Give permissions", "Set a group's permissions, and who's in it, up to their own permissions."},

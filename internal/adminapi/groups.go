@@ -74,9 +74,14 @@ func (a *API) getGroup(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	passkeys, err := a.store.PasskeyCounts(r.Context(), organisation(r).ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	out := make([]userJSON, len(members))
 	for i := range members {
-		out[i] = a.userView(&members[i])
+		out[i] = withPasskeys(a.userView(&members[i]), passkeys[members[i].ID])
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"group": g, "members": out})
 }
