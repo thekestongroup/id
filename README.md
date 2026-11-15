@@ -166,3 +166,22 @@ apps (with a server) name an environment variable holding their secret in
 `secretEnv`; leave it out for public apps (single-page or mobile), which must
 use PKCE. `verification` is `owned` (The Keston Group's own), `verified`
 (a checked partner) or `none` (shows a warning on the consent page).
+
+### An organisation's own apps
+
+Organisations add their own SSO apps in Keston Admin (Apps → Add an app),
+with OpenID Connect (a web app with a secret, or a single-page or mobile app
+with PKCE) or SAML 2.0 (from the app's metadata URL or XML, or its entity ID
+and ACS URL). Only that organisation's users can sign in to them, there's no
+consent prompt, and their tokens never carry Keston's own claims (`org`,
+`perms`) or audiences.
+
+SAML apps each get their own IdP endpoints (`internal/samlidp`):
+`/saml/{app}/metadata` (also the IdP entity ID), `/saml/{app}/sso` and
+`/saml/{app}/start` (IdP-initiated). NameID is the email address; the
+attributes are `email`, `name`, `given_name`, `family_name` and `groups`.
+Assertions are signed with one SAML certificate, made at start and kept
+encrypted like the OIDC keys.
+
+End-to-end tests (`go test -tags e2e ./internal/server/`) need a throwaway
+Postgres; see the top of `internal/server/sso_apps_e2e_test.go`.

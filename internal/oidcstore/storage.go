@@ -219,12 +219,15 @@ func (s *Storage) GetClientByClientID(ctx context.Context, id string) (op.Client
 	if err != nil {
 		return nil, fmt.Errorf("client %q: %w", id, err)
 	}
+	if c.Protocol != "oidc" { // SAML apps sign in through /saml (internal/samlidp)
+		return nil, fmt.Errorf("client %q: not an OpenID Connect app", id)
+	}
 	return client{Client: c, idTokenTTL: s.cfg.IDTokenTTL}, nil
 }
 
 func (s *Storage) AuthorizeClientIDSecret(ctx context.Context, id, clientSecret string) error {
 	c, err := s.store.ClientByID(ctx, id)
-	if err != nil || c.SecretHash == nil {
+	if err != nil || c.SecretHash == nil || c.Protocol != "oidc" {
 		return errors.New("invalid client")
 	}
 	ok, err := secret.CheckPassword(*c.SecretHash, clientSecret)
@@ -317,7 +320,7 @@ func (s *Storage) SetIntrospectionFromToken(ctx context.Context, resp *oidc.Intr
 func (s *Storage) audience(ctx context.Context, clientID string) []string {
 	aud := []string{clientID}
 	c, err := s.store.ClientByID(ctx, clientID)
-	if err != nil || c.Verification != "owned" {
+	if err != nil || !keston(c) {
 		return aud
 	}
 	aud = append(aud, auth.AudienceKestonID)
@@ -332,6 +335,10 @@ func (s *Storage) audience(ctx context.Context, clientID string) []string {
 	return aud
 }
 
+// keston: one of Keston's own apps. An organisation's own apps never are,
+// whatever else is set.
+func keston(c *store.Client) bool { return c.Verification == "owned" && c.OrganisationID == nil }
+
 // adminClientID is Keston Admin's client ID.
 const adminClientID = "admin"
 
@@ -342,7 +349,7 @@ const adminClientID = "admin"
 func (s *Storage) GetPrivateClaimsFromScopes(ctx context.Context, userID, clientID string, _ []string) (map[string]any,
 	error) {
 	c, err := s.store.ClientByID(ctx, clientID)
-	if err != nil || c.Verification != "owned" || userID == "" {
+	if err != nil || !keston(c) || userID == "" {
 		return nil, nil
 	}
 	u, err := s.store.UserByID(ctx, userID)

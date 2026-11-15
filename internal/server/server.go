@@ -24,7 +24,9 @@ import (
 	"github.com/thekestongroup/id/internal/adminapi"
 	"github.com/thekestongroup/id/internal/api"
 	"github.com/thekestongroup/id/internal/config"
+	"github.com/thekestongroup/id/internal/db"
 	"github.com/thekestongroup/id/internal/oidcstore"
+	"github.com/thekestongroup/id/internal/samlidp"
 	"github.com/thekestongroup/id/internal/store"
 	"github.com/thekestongroup/id/kit/auth"
 )
@@ -67,6 +69,15 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 	})
 
 	r.Mount("/api", a.Routes())
+
+	// SAML 2.0 sign-in for organisations' SAML apps (internal/samlidp).
+	saml := samlidp.New(st, cfg, a.ActiveSessionID)
+	if err := db.WithLock(context.Background(), st.DB, 4_441_950, func() error {
+		return saml.EnsureCertificate(context.Background())
+	}); err != nil {
+		return nil, err
+	}
+	r.Mount("/saml", saml.Routes())
 	// Opening a Keston support account, from Keston Admin.
 	r.Get("/support-sign-in", a.SupportSignIn)
 
@@ -102,6 +113,7 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 		return out, nil
 	})
 	admin := adminapi.New(st, auth.NewVerifier(cfg.Issuer, auth.AudienceKestonID, ownKeys), cfg.Issuer)
+	admin.SetSAML(saml)
 	// Self-service sign-up: no sign-in (rate limited). Mounted first, so it
 	// isn't behind the admin API's token check.
 	r.Mount("/admin/v1/public", admin.PublicRoutes())

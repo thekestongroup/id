@@ -93,6 +93,11 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		res.Step = "mfa"
 		return res, 0, ""
 	}
+	// Another organisation's own app: only its users can sign in to it.
+	if client.OrganisationID != nil && *client.OrganisationID != cur.user.OrganisationID {
+		return nil, http.StatusForbidden, client.Name + " is only for another organisation's accounts. " +
+			"Sign in with your account there, or ask the app's admins."
+	}
 	// Turned off for them by their organisation (Keston Admin → Apps).
 	if eff, err := a.store.EffectiveApps(ctx, cur.user); err == nil && eff[client.ID] == store.AppDisabled {
 		return nil, http.StatusForbidden, cur.user.Organisation + " has turned off " + client.Name +
@@ -108,6 +113,16 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 	var granted []string
 	if client.SkipConsent {
 		granted = ar.Scopes
+	} else if client.OrganisationID != nil {
+		// The organisation's own app: it set the app up, so no prompt. The
+		// grant puts it on their Connected apps page.
+		granted = intersect(ar.Scopes, append(slices.Clone(client.RequiredScopes), client.OptionalScopes...))
+		if slices.Contains(ar.Scopes, "openid") && !slices.Contains(granted, "openid") {
+			granted = append([]string{"openid"}, granted...)
+		}
+		if err := a.store.SaveGrant(ctx, cur.user.ID, client.ID, granted); err != nil {
+			return nil, http.StatusInternalServerError, "Something went wrong. Try again."
+		}
 	} else if g, err := a.store.Grant(ctx, cur.user.ID, client.ID); err == nil && !slices.Contains(ar.Prompt, "consent") &&
 		len(intersect(required, g.Scopes)) == len(required) {
 		granted = append([]string{"openid"}, append(required, intersect(optional, g.Scopes)...)...)
@@ -118,6 +133,9 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 			return nil, http.StatusInternalServerError, "Something went wrong. Try again."
 		}
 		res.Step, res.Redirect = "redirect", a.callbackURL(ar.ID)
+		if ar.ResponseType == "saml" {
+			res.Redirect = a.cfg.Issuer + "/saml/callback?id=" + url.QueryEscape(ar.ID)
+		}
 		return res, 0, ""
 	}
 

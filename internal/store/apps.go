@@ -24,9 +24,11 @@ func (s *Store) BuiltinClients(ctx context.Context) ([]Client, error) {
 	return s.collectClients(s.DB.Query(ctx, `SELECT `+clientColumns+` FROM clients WHERE builtin ORDER BY name`))
 }
 
-// AllClients is every registered app, for admins choosing apps to add.
-func (s *Store) AllClients(ctx context.Context) ([]Client, error) {
-	return s.collectClients(s.DB.Query(ctx, `SELECT `+clientColumns+` FROM clients ORDER BY name`))
+// ClientsFor is every app an organisation can use: those Keston registered,
+// and its own (never another organisation's).
+func (s *Store) ClientsFor(ctx context.Context, orgID string) ([]Client, error) {
+	return s.collectClients(s.DB.Query(ctx, `SELECT `+clientColumns+` FROM clients
+		WHERE organisation_id IS NULL OR organisation_id = $1 ORDER BY name`, orgID))
 }
 
 // RemovedApps: apps this person has turned off (where they're allowed to).

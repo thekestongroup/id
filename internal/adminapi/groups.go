@@ -195,6 +195,10 @@ type appJSON struct {
 	Verification string `json:"verification"`
 	// One of Keston's own apps: forced unless the organisation says otherwise.
 	Builtin bool `json:"builtin"`
+	// Added by this organisation (Own apps): "oidc" or "saml".
+	Own      bool   `json:"own"`
+	Protocol string `json:"protocol"`
+	LogoURL  string `json:"logoUrl"`
 }
 
 // GET …/apps: every app, the groups, and the organisation's settings:
@@ -202,7 +206,7 @@ type appJSON struct {
 func (a *API) listApps(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	org := organisation(r)
-	all, err := a.store.AllClients(ctx)
+	all, err := a.store.ClientsFor(ctx, org.ID)
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -223,7 +227,7 @@ func (a *API) listApps(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		apps = append(apps, appJSON{ID: c.ID, Name: c.Name, Publisher: c.Publisher, Verification: c.Verification,
-			Builtin: c.Builtin})
+			Builtin: c.Builtin, Own: c.OrganisationID != nil, Protocol: c.Protocol, LogoURL: c.LogoURL})
 	}
 	def := map[string]string{}
 	byGroup := map[string]map[string]string{}
@@ -263,7 +267,7 @@ func (a *API) putAppPolicy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	org := organisation(r)
 	c, err := a.store.ClientByID(ctx, chi.URLParam(r, "clientID"))
-	if err != nil || c.ID == ClientID {
+	if err != nil || c.ID == ClientID || (c.OrganisationID != nil && *c.OrganisationID != org.ID) {
 		writeError(w, http.StatusNotFound, "not_found", "That app doesn't exist.")
 		return
 	}
