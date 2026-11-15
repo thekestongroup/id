@@ -458,7 +458,7 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 func (a *API) target(w http.ResponseWriter, r *http.Request) *store.User {
 	u, err := a.store.UserByID(r.Context(), chi.URLParam(r, "userID"))
 	if err != nil || u.OrganisationID != organisation(r).ID {
-		writeError(w, http.StatusNotFound, "not_found", "That account doesn't exist.")
+		writeError(w, http.StatusNotFound, "not_found", "That user doesn't exist.")
 		return nil
 	}
 	return u
@@ -506,7 +506,7 @@ func (a *API) setStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if u.ID == caller(r).ID && body.Status == "disabled" {
-		writeError(w, http.StatusConflict, "self", "You can't disable your own account.")
+		writeError(w, http.StatusConflict, "self", "You can't disable yourself.")
 		return
 	}
 	if err := a.store.SetUserStatus(r.Context(), u.ID, body.Status); err != nil {
