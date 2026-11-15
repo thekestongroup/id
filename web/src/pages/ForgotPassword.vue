@@ -16,6 +16,10 @@ import KestonIdPage from '../components/KestonIdPage.vue'
           Ask your school or organisation's IT team to reset it. They'll give you a new password to sign in with, which
           you can then change in your Keston account.
         </p>
+        <p class="text-sm">
+          If they give you an access pass instead,
+          <Link :as="RouterLink" to="/access-pass">sign in with your access pass</Link>.
+        </p>
       </div>
     </Card>
     <p class="text-center text-sm"><Link :as="RouterLink" to="/sign-in">Back to sign in</Link></p>

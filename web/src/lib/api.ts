@@ -34,9 +34,14 @@ export interface UserView {
   avatar?: string
 }
 
+/** Things someone must do before they're fully signed in: choose a new password, set up MFA. */
+export type RequiredAction = 'password' | 'mfa'
+
 /** What the sign-in flow shows next. */
 export interface Flow {
-  step: 'sign-in' | 'choose' | 'mfa' | 'consent' | 'redirect' | 'account'
+  step: 'sign-in' | 'choose' | 'mfa' | 'actions' | 'consent' | 'redirect' | 'account'
+  /** step 'actions': what's left, in order. */
+  actions?: RequiredAction[]
   redirect?: string
   client?: ClientView
   scopes?: { required: ScopeInfo[]; optional: ScopeInfo[] }
@@ -130,6 +135,16 @@ export const api = {
     request<Flow>('POST', '/sign-in', { email, password, authRequestID }),
   mfa: (code: string, kind: 'app' | 'backup', authRequestID?: string) =>
     request<Flow>('POST', '/mfa', { code, kind, authRequestID }),
+  /** Signing in with a temporary access pass from an admin, instead of a password and MFA. */
+  signInWithPass: (email: string, code: string, authRequestID?: string) =>
+    request<Flow>('POST', '/sign-in/access-pass', { email, code, authRequestID }),
+  /** Required actions, during sign-in. */
+  requiredPassword: (next: string, authRequestID?: string) =>
+    request<Flow>('POST', '/required/password', { new: next, authRequestID }),
+  requiredMfaSetup: () =>
+    request<{ secret: string; otpauthUrl: string; qrCode: string }>('POST', '/required/mfa/setup', {}),
+  requiredMfaEnable: (code: string, authRequestID?: string) =>
+    request<{ backupCodes: string[]; flow: Flow }>('POST', '/required/mfa/enable', { code, authRequestID }),
   consent: (authRequestID: string, scopes: string[]) =>
     request<Flow>('POST', '/consent', { authRequestID, scopes }),
   /** Signs the active account (or every account) out of Keston ID and its apps. */

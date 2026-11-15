@@ -27,6 +27,16 @@ export const router = createRouter({
     },
     { path: '/two-step', redirect: (to) => ({ path: '/mfa', query: to.query }) },
     { path: '/mfa', component: () => import('./pages/Mfa.vue'), meta: { title: "Check it's you" } },
+    {
+      path: '/required',
+      component: () => import('./pages/RequiredActions.vue'),
+      meta: { title: 'Before you continue' },
+    },
+    {
+      path: '/access-pass',
+      component: () => import('./pages/AccessPass.vue'),
+      meta: { title: 'Sign in with an access pass' },
+    },
     { path: '/consent', component: () => import('./pages/Consent.vue'), meta: { title: 'Allow access' } },
     {
       path: '/forgot-password',

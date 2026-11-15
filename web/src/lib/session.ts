@@ -45,6 +45,8 @@ export async function follow(router: Router, flow: Flow, authRequestID?: string)
       return router.replace({ path: '/choose-account', query })
     case 'mfa':
       return router.replace({ path: '/mfa', query })
+    case 'actions':
+      return router.replace({ path: '/required', query })
     default:
       return router.replace({ path: '/sign-in', query })
   }
