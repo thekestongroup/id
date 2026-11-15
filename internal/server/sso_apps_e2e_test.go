@@ -116,6 +116,7 @@ func (e *env) org(name, domain string) (*store.Organisation, *store.User) {
 	if err != nil {
 		e.t.Fatal(err)
 	}
+	_ = e.st.SetMFAMode(context.Background(), org.ID, store.MFAOff) // Not testing MFA here.
 	return org, admin
 }
 

@@ -220,11 +220,13 @@ func TestLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = e.st.SetMFAMode(ctx, org.ID, store.MFAOff) // Not testing MFA here.
 	other, otherAdmin, err := e.st.CreateOrganisation(ctx, "Elsewhere", "elsewhere"+suffix+".test", store.NewUser{
 		Email: "boss@elsewhere" + suffix + ".test", Name: "Boss", PasswordHash: secret.HashPassword(pw)})
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = e.st.SetMFAMode(ctx, other.ID, store.MFAOff)
 	adminTok := e.token(admin)
 	base := "/organisations/" + org.ID
 
@@ -453,6 +455,7 @@ func TestSupportLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = e.st.SetMFAMode(ctx, org.ID, store.MFAOff) // Not testing MFA here.
 	base := "/organisations/" + org.ID
 	staffTok, adminTok := e.token(staff), e.token(admin)
 

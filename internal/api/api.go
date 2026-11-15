@@ -53,6 +53,7 @@ func (a *API) Routes() http.Handler {
 	r.Post("/required/password", a.requiredPassword)
 	r.Post("/required/mfa/setup", a.requiredMFASetup)
 	r.Post("/required/mfa/enable", a.requiredMFAEnable)
+	r.Post("/required/mfa/skip", a.requiredMFASkip)
 	r.Post("/consent", a.consent)
 	r.Post("/sign-out", a.signOut)
 	r.Get("/accounts", a.accounts)

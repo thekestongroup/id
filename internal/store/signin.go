@@ -24,22 +24,48 @@ const (
 type SignInState struct {
 	PasswordChangeRequired bool
 	MFARequired            bool
+	// When MFA is required but there's a grace period: when it ends. Until
+	// then they can put off setting it up. nil: required now.
+	MFADeadline *time.Time
 }
 
 // SignInState reads whether they must change their password, and whether
-// MFA is required for them: any of their groups requiring it wins, then any
-// group not requiring it, then the organisation's default.
+// MFA is required for them (MFAMode): off, everyone (with the grace
+// period), or custom rules (any of their groups requiring it wins, then any
+// group not requiring it, then the organisation's default).
 func (s *Store) SignInState(ctx context.Context, u *User) (*SignInState, error) {
 	var st SignInState
-	err := s.DB.QueryRow(ctx, `SELECT u.password_change_required,
+	var mode string
+	var grace int
+	var start time.Time
+	var custom bool
+	err := s.DB.QueryRow(ctx, `SELECT u.password_change_required, o.mfa_mode, o.mfa_grace_days,
+		greatest(o.mfa_required_since, u.created_at),
 		coalesce((SELECT bool_or(g.mfa_required) FROM groups g JOIN group_members m ON m.group_id = g.id
 			WHERE m.user_id = u.id), o.mfa_required)
 		FROM users u JOIN organisations o ON o.id = u.organisation_id WHERE u.id = $1`, u.ID).
-		Scan(&st.PasswordChangeRequired, &st.MFARequired)
+		Scan(&st.PasswordChangeRequired, &mode, &grace, &start, &custom)
 	if err != nil {
 		return nil, notFound(err)
 	}
+	switch mode {
+	case MFARequired:
+		st.MFARequired = true
+		if grace > 0 {
+			d := start.AddDate(0, 0, grace)
+			st.MFADeadline = &d
+		}
+	case MFACustom:
+		st.MFARequired = custom
+	}
 	return &st, nil
+}
+
+// SkipMFAForNow: "Not now" to setting up MFA, for the rest of this session
+// (only during the grace period).
+func (s *Store) SkipMFAForNow(ctx context.Context, sessionID string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE sessions SET mfa_skipped = TRUE WHERE id = $1`, sessionID)
+	return err
 }
 
 // SetSessionStage moves a session between 'actions' and 'verified'. It
@@ -107,16 +133,27 @@ type GroupMFA struct {
 	Required *bool `json:"required"`
 }
 
+// MFA modes (Keston Admin → Settings → Multi-factor authentication).
+const (
+	MFAOff      = "off"
+	MFARequired = "required"
+	MFACustom   = "custom"
+)
+
 type MFAPolicy struct {
-	// The organisation's default.
+	// off, required (everyone) or custom (rules).
+	Mode string `json:"mode"`
+	// Required: days to set up MFA before it's enforced (0: at next sign-in).
+	GracePeriodDays int `json:"gracePeriodDays"`
+	// Custom rules: the default, for everyone not covered by a group's rule.
 	Required bool       `json:"required"`
 	Groups   []GroupMFA `json:"groups"`
 }
 
 func (s *Store) MFAPolicy(ctx context.Context, orgID string) (*MFAPolicy, error) {
 	var p MFAPolicy
-	if err := s.DB.QueryRow(ctx, `SELECT mfa_required FROM organisations WHERE id = $1`, orgID).
-		Scan(&p.Required); err != nil {
+	if err := s.DB.QueryRow(ctx, `SELECT mfa_mode, mfa_grace_days, mfa_required FROM organisations WHERE id = $1`, orgID).
+		Scan(&p.Mode, &p.GracePeriodDays, &p.Required); err != nil {
 		return nil, notFound(err)
 	}
 	rows, err := s.DB.Query(ctx, `SELECT g.id::text, g.name,
@@ -129,6 +166,21 @@ func (s *Store) MFAPolicy(ctx context.Context, orgID string) (*MFAPolicy, error)
 	return &p, err
 }
 
+// SetMFAMode: switching to required starts the grace period from now.
+func (s *Store) SetMFAMode(ctx context.Context, orgID, mode string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE organisations SET mfa_mode = $2,
+		mfa_required_since = CASE WHEN $2 = 'required' AND mfa_mode <> 'required' THEN now() ELSE mfa_required_since END,
+		updated_at = now() WHERE id = $1`, orgID, mode)
+	return err
+}
+
+func (s *Store) SetMFAGraceDays(ctx context.Context, orgID string, days int) error {
+	_, err := s.DB.Exec(ctx, `UPDATE organisations SET mfa_grace_days = $2, updated_at = now() WHERE id = $1`,
+		orgID, days)
+	return err
+}
+
+// SetMFARequired: the custom rules' default.
 func (s *Store) SetMFARequired(ctx context.Context, orgID string, required bool) error {
 	_, err := s.DB.Exec(ctx, `UPDATE organisations SET mfa_required = $2, updated_at = now() WHERE id = $1`,
 		orgID, required)

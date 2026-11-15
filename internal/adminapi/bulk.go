@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -475,17 +476,21 @@ func (a *API) bulkRestore(w http.ResponseWriter, r *http.Request) {
 // maxBulkCreate: users added in one go.
 const maxBulkCreate = 250
 
-// POST …/users/bulk/create {users: [{name, username}], licences,
-// requirePasswordChange?}: adds members, each with their own new password
-// (returned once) and the same licences. A row that can't be added (no
-// name, a username that's taken…) is skipped with the reason; the rest are
-// still added. requirePasswordChange defaults to on.
+// POST …/users/bulk/create {users: [{name, username, domain?}], password?,
+// licences, requirePasswordChange?}: adds members with the same licences.
+// Each gets their own new password (returned once), or all get the one
+// given (e.g. for a new school year, changed at first sign-in). A domain
+// must be one of the organisation's (the main one if left out). A row that
+// can't be added (no name, a username that's taken…) is skipped with the
+// reason; the rest are still added. requirePasswordChange defaults to on.
 func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Users []struct {
 			Name     string `json:"name"`
 			Username string `json:"username"`
+			Domain   string `json:"domain"`
 		} `json:"users"`
+		Password              string   `json:"password"`
 		Licences              []string `json:"licences"`
 		RequirePasswordChange *bool    `json:"requirePasswordChange"`
 	}
@@ -505,6 +510,13 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	org := organisation(r)
+	if body.Password != "" {
+		if failed := org.PasswordPolicy.Check(body.Password); len(failed) > 0 {
+			writeFieldError(w, "password", policy.Message(failed))
+			return
+		}
+	}
+	domains := orgDomains(org)
 	mustChange := body.RequirePasswordChange == nil || *body.RequirePasswordChange
 	results := make([]bulkResult, len(body.Users))
 	seen := map[string]bool{}
@@ -512,22 +524,35 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 	for i, in := range body.Users {
 		name := strings.TrimSpace(in.Name)
 		username := normaliseUsername(in.Username)
-		email := username + "@" + org.Domain
+		domain := strings.ToLower(strings.TrimSpace(in.Domain))
+		if domain == "" {
+			domain = org.Domain
+		}
+		email := username + "@" + domain
 		res := bulkResult{Name: name, Email: email, Result: "skipped"}
 		switch {
 		case name == "" || len(name) > 200:
 			res.Reason = "Enter their name."
 		case !usernameRE.MatchString(username):
 			res.Reason = usernameHelp
-		case seen[username]:
-			res.Reason = "The same username is in the list twice."
+		case !slices.Contains(domains, domain):
+			res.Reason = domain + " isn't one of your domains."
+		case seen[email]:
+			res.Reason = "The same email is in the list twice."
 		}
-		seen[username] = true
+		seen[email] = true
 		if res.Reason != "" {
 			results[i] = res
 			continue
 		}
-		pw := org.PasswordPolicy.Generate(username)
+		pw := body.Password
+		if pw == "" {
+			pw = org.PasswordPolicy.Generate(username)
+		} else if failed := org.PasswordPolicy.Check(pw, username); len(failed) > 0 {
+			res.Reason = "The password doesn't suit them: " + policy.Message(failed)
+			results[i] = res
+			continue
+		}
 		created, err := a.store.CreateUser(ctx, a.store.DB, store.NewUser{
 			OrganisationID: org.ID, Email: email, Name: name, Role: "member", PasswordHash: secret.HashPassword(pw),
 		})
@@ -556,10 +581,16 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		res.ID, res.Result, res.Password = created.ID, "done", pw
+		res.ID, res.Result = created.ID, "done"
+		if body.Password == "" {
+			res.Password = pw
+		}
 		results[i] = res
 		done++
 	}
 	slog.Info("bulk create", "organisation", org.ID, "done", done, "requested", len(body.Users), "by", caller(r).ID)
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
+
+// orgDomains: the domains an organisation's users can have (one, for now).
+func orgDomains(org *store.Organisation) []string { return []string{strings.ToLower(org.Domain)} }

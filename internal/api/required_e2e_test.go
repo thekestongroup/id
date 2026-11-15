@@ -70,6 +70,7 @@ func setup(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = st.SetMFAMode(ctx, org.ID, store.MFAOff) // Not testing MFA here.
 	return &env{t: t, st: st, srv: srv, orgID: org.ID}
 }
 
@@ -124,6 +125,8 @@ type flowOut struct {
 	Redirect string   `json:"redirect"`
 	Field    string   `json:"field"`
 	Message  string   `json:"message"`
+	// Setting up MFA can be put off until then.
+	MFAGraceUntil *time.Time `json:"mfaGraceUntil"`
 }
 
 func (b *browser) signIn(email, password string, authRequestID string) flowOut {
@@ -239,6 +242,7 @@ func TestMFARequiredPolicy(t *testing.T) {
 	office, _ := e.st.CreateGroup(ctx, e.orgID, "Office")
 	staff, _ := e.st.CreateGroup(ctx, e.orgID, "Staff")
 	yes, no := true, false
+	_ = e.st.SetMFAMode(ctx, e.orgID, store.MFACustom)
 	_ = e.st.SetMFARequired(ctx, e.orgID, true)
 	_ = e.st.SetGroupMFARequired(ctx, e.orgID, office.ID, &no)
 	_ = e.st.SetGroupMFARequired(ctx, e.orgID, staff.ID, &yes)
@@ -282,6 +286,7 @@ func TestBothActionsBeforeTheApp(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	u := e.user("dee")
+	_ = e.st.SetMFAMode(ctx, e.orgID, store.MFACustom)
 	_ = e.st.SetMFARequired(ctx, e.orgID, true)
 	_ = e.st.SetPasswordChangeRequired(ctx, u.ID, true)
 	client := &store.Client{ID: "test-app-" + secret.Token()[:6], Name: "Test app", Publisher: "Test",
@@ -415,5 +420,68 @@ func TestAccessPass(t *testing.T) {
 	_, _ = e.st.DB.Exec(ctx, `UPDATE access_passes SET expires_at = now() - interval '1 minute' WHERE id = $1`, p3.ID)
 	if n, _ := signIn(e.browser(), code3); n != 422 {
 		t.Fatalf("expired pass: %d", n)
+	}
+}
+
+// Require MFA for everyone, with a grace period: until it ends, "Not now"
+// puts off setting it up for that session; after it (or with 0 days), it
+// must be done.
+func TestMFAGracePeriod(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	u := e.user("gray")
+	_ = e.st.SetMFAMode(ctx, e.orgID, store.MFARequired)
+	_ = e.st.SetMFAGraceDays(ctx, e.orgID, 7)
+
+	b := e.browser()
+	f := b.signIn(u.Email, goodPassword, "")
+	wantActions(t, f, ActionMFA)
+	if f.MFAGraceUntil == nil || f.MFAGraceUntil.Sub(time.Now()) < 6*24*time.Hour {
+		t.Fatalf("grace until %v, want about 7 days from now", f.MFAGraceUntil)
+	}
+	var after flowOut
+	if code := b.do("POST", "/required/mfa/skip", map[string]string{}, &after); code != 200 || after.Step != "account" {
+		t.Fatalf("Not now: %d %+v", code, after)
+	}
+	// Asked again at the next sign-in.
+	wantActions(t, e.browser().signIn(u.Email, goodPassword, ""), ActionMFA)
+
+	// 0 days: required now, and can't be put off.
+	_ = e.st.SetMFAGraceDays(ctx, e.orgID, 0)
+	b = e.browser()
+	f = b.signIn(u.Email, goodPassword, "")
+	wantActions(t, f, ActionMFA)
+	if f.MFAGraceUntil != nil {
+		t.Fatalf("0 days: grace until %v", f.MFAGraceUntil)
+	}
+	if code := b.do("POST", "/required/mfa/skip", map[string]string{}, nil); code != http.StatusConflict {
+		t.Fatalf("Not now with 0 days: %d", code)
+	}
+
+	// The grace period over (turned on, and they joined, 8 days ago).
+	_ = e.st.SetMFAGraceDays(ctx, e.orgID, 7)
+	if _, err := e.st.DB.Exec(ctx, `UPDATE organisations SET mfa_required_since = now() - interval '8 days' WHERE id = $1`, e.orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.DB.Exec(ctx, `UPDATE users SET created_at = now() - interval '8 days' WHERE id = $1`, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if f := e.browser().signIn(u.Email, goodPassword, ""); f.MFAGraceUntil != nil {
+		t.Fatalf("after the grace period: %+v", f)
+	}
+	// Someone who joined since still gets their 7 days.
+	n := e.user("newer")
+	if f := e.browser().signIn(n.Email, goodPassword, ""); f.MFAGraceUntil == nil {
+		t.Fatalf("new user: no grace period: %+v", f)
+	}
+
+	// Turning it off and on again starts a new grace period for everyone.
+	_ = e.st.SetMFAMode(ctx, e.orgID, store.MFAOff)
+	if f := e.browser().signIn(u.Email, goodPassword, ""); f.Step != "account" {
+		t.Fatalf("off: %+v", f)
+	}
+	_ = e.st.SetMFAMode(ctx, e.orgID, store.MFARequired)
+	if f := e.browser().signIn(u.Email, goodPassword, ""); f.MFAGraceUntil == nil {
+		t.Fatalf("on again: no grace period: %+v", f)
 	}
 }

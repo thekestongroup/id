@@ -48,6 +48,8 @@ export interface Flow {
   user?: UserView
   /** At the MFA step: the ways this account can do it. */
   mfa?: { app: boolean; passkey: boolean }
+  /** step 'actions' with MFA: it can be put off ("Not now") until then. */
+  mfaGraceUntil?: string
 }
 
 /** A passkey or security key on the account. */
@@ -173,6 +175,8 @@ export const api = {
     request<Flow>('POST', '/api/required/password', { new: next, authRequestID }),
   requiredMfaSetup: () =>
     request<{ secret: string; otpauthUrl: string; qrCode: string }>('POST', '/api/required/mfa/setup', {}),
+  /** "Not now", during the organisation's grace period. */
+  requiredMfaSkip: (authRequestID?: string) => request<Flow>('POST', '/api/required/mfa/skip', { authRequestID }),
   requiredMfaEnable: (code: string, authRequestID?: string) =>
     request<{ backupCodes: string[]; flow: Flow }>('POST', '/api/required/mfa/enable', { code, authRequestID }),
   consent: (authRequestID: string, scopes: string[]) =>

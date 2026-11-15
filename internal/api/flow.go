@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"slices"
@@ -27,6 +28,8 @@ type flowResponse struct {
 	User *userView `json:"user,omitempty"`
 	// step "actions": what they must do first, in order ("password", "mfa").
 	Actions []string `json:"actions,omitempty"`
+	// Setting up MFA can be put off ("Not now") until then.
+	MFAGraceUntil *time.Time `json:"mfaGraceUntil,omitempty"`
 	// At the MFA step: the ways this account can do it.
 	MFA *mfaMethods `json:"mfa,omitempty"`
 }
@@ -57,6 +60,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 			res.MFA = a.mfaMethodsFor(ctx, cur.user)
 		case len(actions) > 0:
 			res.Step, res.Actions = "actions", actions
+			res.MFAGraceUntil = a.graceFor(ctx, cur, actions)
 		default:
 			res.Step = "account"
 		}
@@ -114,6 +118,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 			return res, 0, ""
 		}
 		res.Step, res.Actions = "actions", actions
+		res.MFAGraceUntil = a.graceFor(ctx, cur, actions)
 		return res, 0, ""
 	}
 	// Another organisation's own app: only its users can sign in to it.
@@ -423,3 +428,11 @@ func (a *API) consent(w http.ResponseWriter, r *http.Request) {
 }
 
 var _ = store.ErrNotFound
+
+// graceFor: when MFA is among the actions and can still be put off, until when.
+func (a *API) graceFor(ctx context.Context, cur *current, actions []string) *time.Time {
+	if !slices.Contains(actions, ActionMFA) {
+		return nil
+	}
+	return a.mfaGraceUntil(ctx, cur)
+}

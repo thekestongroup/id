@@ -82,6 +82,25 @@ watch(
   { immediate: true },
 )
 
+// In the grace period: when MFA becomes compulsory, and "Not now".
+const graceUntil = computed(() =>
+  flow.value?.mfaGraceUntil
+    ? new Date(flow.value.mfaGraceUntil).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+    : undefined,
+)
+const skipStatus = ref<ButtonStatus>('idle')
+async function skip() {
+  skipStatus.value = 'loading'
+  try {
+    const f = await api.requiredMfaSkip(authRequestID.value)
+    skipStatus.value = 'idle'
+    await done(f)
+  } catch (e) {
+    skipStatus.value = 'idle'
+    setupError.value = message(e)
+  }
+}
+
 async function enable(value = code.value) {
   if (value.length < 6) {
     codeStatus.value = 'error'
@@ -154,7 +173,12 @@ async function enable(value = code.value) {
         <div v-else class="flex flex-col gap-4">
           <div class="flex flex-col gap-1">
             <h1 tabindex="-1" class="text-xl font-bold outline-none">Set up MFA</h1>
-            <p class="text-sm text-black/65">
+            <p v-if="graceUntil" class="text-sm text-black/65">
+              Your organisation requires MFA from {{ graceUntil }}. Set it up now: add Keston ID to an authenticator
+              app on your phone, like Google Authenticator, Microsoft Authenticator or 1Password. You'll enter a code
+              from it when you sign in.
+            </p>
+            <p v-else class="text-sm text-black/65">
               Before you continue, add Keston ID to an authenticator app on your phone, like Google Authenticator,
               Microsoft Authenticator or 1Password. You'll enter a code from it when you sign in.
             </p>
@@ -192,6 +216,9 @@ async function enable(value = code.value) {
               <Button type="submit" variant="primary" :disabled="codeStatus === 'loading'">Turn on MFA</Button>
             </form>
           </template>
+          <Button v-if="graceUntil" :status="skipStatus" loading-text="Continuing" @click="skip">
+            Not now, remind me next time
+          </Button>
         </div>
       </Card>
 

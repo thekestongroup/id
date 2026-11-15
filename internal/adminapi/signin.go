@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,22 +31,73 @@ func (a *API) getMFAPolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
-// PUT …/mfa-policy {required}: the organisation's default.
+// PUT …/mfa-policy {mode?, gracePeriodDays?, required?}: any of the
+// organisation's MFA mode (off, required, custom), the grace period for
+// "required" (0–90 days), and the custom rules' default. Changes apply at
+// each person's next sign-in.
 func (a *API) putMFAPolicy(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Required bool `json:"required"`
+		Mode            *string `json:"mode"`
+		GracePeriodDays *int    `json:"gracePeriodDays"`
+		Required        *bool   `json:"required"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	if err := a.store.SetMFARequired(r.Context(), organisation(r).ID, body.Required); err != nil {
+	if body.Mode != nil && !slices.Contains([]string{store.MFAOff, store.MFARequired, store.MFACustom}, *body.Mode) {
+		writeFieldError(w, "mode", "Choose Off, Require MFA for everyone or Custom rules")
+		return
+	}
+	if body.GracePeriodDays != nil && (*body.GracePeriodDays < 0 || *body.GracePeriodDays > 90) {
+		writeFieldError(w, "gracePeriodDays", "Enter a number of days from 0 to 90")
+		return
+	}
+	ctx := r.Context()
+	org := organisation(r)
+	before, err := a.store.MFAPolicy(ctx, org.ID)
+	if err != nil {
 		serverError(w, r, err)
 		return
 	}
-	slog.Info("mfa requirement changed", "organisation", organisation(r).ID, "required", body.Required,
-		"by", caller(r).ID)
-	a.audit(r, store.ActionMFAPolicy, aboutOrg(organisation(r)), "Everyone: "+requiredLabel(&body.Required))
+	changes := []string{}
+	if body.Mode != nil && *body.Mode != before.Mode {
+		if err := a.store.SetMFAMode(ctx, org.ID, *body.Mode); err != nil {
+			serverError(w, r, err)
+			return
+		}
+		changes = append(changes, change("Multi-factor authentication", mfaModeLabel(before.Mode), mfaModeLabel(*body.Mode)))
+	}
+	if body.GracePeriodDays != nil && *body.GracePeriodDays != before.GracePeriodDays {
+		if err := a.store.SetMFAGraceDays(ctx, org.ID, *body.GracePeriodDays); err != nil {
+			serverError(w, r, err)
+			return
+		}
+		changes = append(changes, change("Grace period", days(before.GracePeriodDays), days(*body.GracePeriodDays)))
+	}
+	if body.Required != nil && *body.Required != before.Required {
+		if err := a.store.SetMFARequired(ctx, org.ID, *body.Required); err != nil {
+			serverError(w, r, err)
+			return
+		}
+		changes = append(changes, "Everyone else: "+requiredLabel(body.Required))
+	}
+	if len(changes) > 0 {
+		slog.Info("mfa policy changed", "organisation", org.ID, "changes", changes, "by", caller(r).ID)
+		a.audit(r, store.ActionMFAPolicy, aboutOrg(org), strings.Join(changes, ". "))
+	}
 	a.getMFAPolicy(w, r)
+}
+
+func mfaModeLabel(mode string) string {
+	return map[string]string{store.MFAOff: "Off", store.MFARequired: "Required for everyone",
+		store.MFACustom: "Custom rules"}[mode]
+}
+
+func days(n int) string {
+	if n == 1 {
+		return "1 day"
+	}
+	return fmt.Sprintf("%d days", n)
 }
 
 func requiredLabel(v *bool) string {

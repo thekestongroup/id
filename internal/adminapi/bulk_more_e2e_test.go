@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/thekestongroup/id/internal/secret"
@@ -164,6 +165,35 @@ func TestBulkCreate(t *testing.T) {
 	}
 	if u.Role != "member" {
 		t.Errorf("Amy's role: %s", u.Role)
+	}
+
+	// One password for everyone; a domain that isn't theirs is skipped.
+	code, raw = e.do(admin, http.MethodPost, "/users/bulk/create", map[string]any{
+		"password": "School28271!x",
+		"users": []map[string]string{
+			{"name": "Cara Cole", "username": "cara", "domain": strings.ToUpper(e.org.Domain)},
+			{"name": "Dan Dale", "username": "dan", "domain": "elsewhere.test"},
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("shared: %d %s", code, raw)
+	}
+	out.Results = nil
+	_ = json.Unmarshal(raw, &out)
+	if r := out.Results[0]; r.Result != "done" || r.Password != "" {
+		t.Errorf("Cara: %+v", r)
+	} else if c, _ := e.st.UserByID(ctx, r.ID); c == nil {
+		t.Error("Cara wasn't created")
+	} else if ok, _ := secret.CheckPassword(c.PasswordHash, "School28271!x"); !ok {
+		t.Error("Cara's shared password doesn't work")
+	}
+	if r := out.Results[1]; r.Result != "skipped" || !strings.Contains(r.Reason, "isn't one of your domains") {
+		t.Errorf("Dan: %+v", r)
+	}
+	if code, _ := e.do(admin, http.MethodPost, "/users/bulk/create", map[string]any{
+		"password": "weak", "users": []map[string]string{{"name": "E", "username": "e"}},
+	}); code != http.StatusUnprocessableEntity {
+		t.Errorf("weak shared password: %d", code)
 	}
 
 	// Licences need "Assign licences".

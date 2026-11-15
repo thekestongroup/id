@@ -68,6 +68,7 @@ func newHarness(t *testing.T) (*harness, *store.User) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = st.SetMFAMode(ctx, user.OrganisationID, store.MFAOff) // Not testing MFA here.
 	cfg := &config.Config{Issuer: testIssuer, Insecure: true, SessionTTL: time.Hour}
 	a := New(st, cfg, func(context.Context, string) error { return nil })
 	// As server.go mounts them: the sign-in flow at /api, your account at

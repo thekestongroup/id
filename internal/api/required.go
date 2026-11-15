@@ -60,10 +60,56 @@ func (a *API) requiredActions(ctx context.Context, cur *current) ([]string, erro
 	if err != nil {
 		return nil, err
 	}
-	if viaPass || (st.MFARequired && !hasMFA) {
+	switch {
+	case viaPass:
 		out = append(out, ActionMFA)
+	case st.MFARequired && !hasMFA:
+		// In the grace period, "Not now" puts it off for this session.
+		if st.MFADeadline == nil || !time.Now().Before(*st.MFADeadline) || !cur.session.MFASkipped {
+			out = append(out, ActionMFA)
+		}
 	}
 	return out, nil
+}
+
+// mfaGraceUntil: when setting up MFA becomes compulsory for them, if they
+// can still put it off ("Not now"); nil if they can't.
+func (a *API) mfaGraceUntil(ctx context.Context, cur *current) *time.Time {
+	if cur.user.IsSupport() || (slices.Contains(cur.session.AMR, amrAccessPass) &&
+		!slices.Contains(cur.session.AMR, "otp") && !slices.Contains(cur.session.AMR, "hwk")) {
+		return nil
+	}
+	st, err := a.store.SignInState(ctx, cur.user)
+	if err != nil || st.MFADeadline == nil || !time.Now().Before(*st.MFADeadline) {
+		return nil
+	}
+	return st.MFADeadline
+}
+
+// POST /api/required/mfa/skip {authRequestID}: "Not now", during the grace
+// period. They're asked again next time they sign in.
+func (a *API) requiredMFASkip(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AuthRequestID string `json:"authRequestID"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	cur := a.inActions(w, r, ActionMFA)
+	if cur == nil {
+		return
+	}
+	ctx := r.Context()
+	if a.mfaGraceUntil(ctx, cur) == nil {
+		writeError(w, http.StatusConflict, "required", "Your organisation requires MFA now. Set it up to continue.")
+		return
+	}
+	if err := a.store.SkipMFAForNow(ctx, cur.session.ID); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	cur.session.MFASkipped = true
+	a.respondNext(w, r, cur, body.AuthRequestID)
 }
 
 // settle brings a signed-in session's stage up to date: 'actions' while any
