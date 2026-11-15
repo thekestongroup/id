@@ -4,6 +4,7 @@ import { computed, ref } from 'vue'
 import ChangePasswordSlideover from '../../components/ChangePasswordSlideover.vue'
 import MfaOffSlideover from '../../components/MfaOffSlideover.vue'
 import MfaSetupSlideover from '../../components/MfaSetupSlideover.vue'
+import PasskeysCard from '../../components/PasskeysCard.vue'
 import { me } from '../../lib/session'
 
 /** How you prove it's you. Each change happens in its own Slideover. */
@@ -38,20 +39,35 @@ const backupLeft = computed(() => {
         <Badge v-else size="sm" color="yellow">Off</Badge>
       </div>
     </template>
+    <!-- MFA is on with an authenticator app or any passkey (see the card
+         below); the buttons here are for the authenticator app. -->
     <template #actions>
-      <Button v-if="security.mfa" size="sm" @click="turningOff = true">Turn off</Button>
-      <Button v-else size="sm" variant="primary" @click="settingUp = true">Turn on</Button>
+      <Button v-if="security.authenticatorApp" size="sm" @click="turningOff = true">
+        {{ security.passkeys ? 'Turn off app' : 'Turn off' }}
+      </Button>
+      <Button v-else size="sm" :variant="security.mfa ? 'basic' : 'primary'" @click="settingUp = true">
+        {{ security.passkeys ? 'Add app' : 'Turn on' }}
+      </Button>
     </template>
-    <p v-if="security.mfa" class="text-sm text-black/65">
+    <p v-if="security.authenticatorApp && security.passkeys" class="text-sm text-black/65">
+      After your password, you use a passkey or enter a code from your authenticator app. {{ backupLeft }}.
+    </p>
+    <p v-else-if="security.authenticatorApp" class="text-sm text-black/65">
       After your password, you enter a code from your authenticator app. {{ backupLeft }}.
+    </p>
+    <p v-else-if="security.passkeys" class="text-sm text-black/65">
+      After your password, you use one of your passkeys. You can add an authenticator app too, in case you can't use
+      them.
     </p>
     <p v-else class="text-sm text-black/65">
       Turn it on so a stolen password isn't enough to get into your account. You'll need an authenticator app on your
-      phone.
+      phone, or add a passkey below.
     </p>
   </Card>
 
+  <PasskeysCard />
+
   <ChangePasswordSlideover v-model:open="changingPassword" />
   <MfaSetupSlideover v-model:open="settingUp" />
-  <MfaOffSlideover v-model:open="turningOff" />
+  <MfaOffSlideover v-model:open="turningOff" :passkeys="security.passkeys" />
 </template>

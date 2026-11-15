@@ -98,6 +98,7 @@ const (
 	SignInPassword   = "password"
 	SignInMFA        = "mfa"
 	SignInBackupCode = "backup_code"
+	SignInPasskey    = "passkey"
 	SignInSupport    = "support"
 	// Signing in to an app (after Keston ID itself).
 	SignInApp = "app"

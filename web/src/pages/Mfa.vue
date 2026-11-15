@@ -1,18 +1,52 @@
 <script setup lang="ts">
 import { Button, Card, Input, InputCode, type InputCodeProps, Link } from '@thekestongroup/ui'
-import { nextTick, ref } from 'vue'
+import { KeyRound } from '@lucide/vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import FlowState from '../components/FlowState.vue'
 import KestonIdPage from '../components/KestonIdPage.vue'
 import { api } from '../lib/api'
+import { cancelled, passkeyError, passkeyMfa } from '../lib/passkeys'
 import { useFlow } from '../lib/useFlow'
 
 /**
- * MFA: a code from an authenticator app, or a backup code. From
- * the TwoStepCode story in Keston UI's "Examples/Keston ID".
+ * MFA: a passkey or security key, a code from an authenticator app, or a
+ * backup code (whichever this account has). From the TwoStepCode story in
+ * Keston UI's "Examples/Keston ID".
  */
-const { authRequestID, client, error: flowError, loading, next } = useFlow('mfa')
+const { authRequestID, client, flow, error: flowError, loading, next } = useFlow('mfa')
 
-const mode = ref<'app' | 'backup'>('app')
+type Mode = 'passkey' | 'app' | 'backup'
+const mode = ref<Mode>('app')
+const methods = computed(() => flow.value?.mfa ?? { app: true, passkey: false })
+// With only passkeys, start there; with an app too, the code (and a link).
+watch(methods, (m) => {
+  if (m.passkey && !m.app) mode.value = 'passkey'
+})
+/** The other ways, as links under the card. */
+const others = computed(() => {
+  const all: { mode: Mode; label: string }[] = []
+  if (methods.value.passkey) all.push({ mode: 'passkey', label: 'Use a passkey' })
+  if (methods.value.app) {
+    all.push({ mode: 'app', label: 'Use your authenticator app' }, { mode: 'backup', label: 'Use a backup code' })
+  }
+  return all.filter((o) => o.mode !== mode.value)
+})
+
+const passkeyStatus = ref<'idle' | 'loading' | 'success'>('idle')
+const passkeyMessage = ref<string>()
+
+async function usePasskey() {
+  passkeyMessage.value = undefined
+  passkeyStatus.value = 'loading'
+  try {
+    const f = await passkeyMfa(authRequestID.value)
+    passkeyStatus.value = 'success'
+    await next(f)
+  } catch (e) {
+    passkeyStatus.value = 'idle'
+    if (!cancelled(e)) passkeyMessage.value = passkeyError(e)
+  }
+}
 const code = ref('')
 const status = ref<InputCodeProps['status']>()
 const statusText = ref<string>()
@@ -55,11 +89,11 @@ async function checkBackup() {
   }
 }
 
-async function switchMode(to: 'app' | 'backup') {
+async function switchMode(to: Mode) {
   mode.value = to
-  status.value = statusText.value = backupError.value = undefined
+  status.value = statusText.value = backupError.value = passkeyMessage.value = undefined
   await nextTick()
-  document.querySelector<HTMLInputElement>('main form input')?.focus()
+  document.querySelector<HTMLElement>('main form input, main form button')?.focus()
 }
 </script>
 
@@ -71,14 +105,29 @@ async function switchMode(to: 'app' | 'backup') {
           <div class="flex flex-col gap-1">
             <h1 tabindex="-1" class="text-xl font-bold outline-none">Check it's you</h1>
             <p class="text-sm text-black/65">
-              <template v-if="mode === 'app'">
+              <template v-if="mode === 'passkey'">Use your passkey or security key to confirm it's you.</template>
+              <template v-else-if="mode === 'app'">
                 Open your authenticator app and enter the code for Keston ID.
               </template>
               <template v-else>Enter one of the backup codes you saved when you set up MFA.</template>
             </p>
           </div>
 
-          <form v-if="mode === 'app'" class="flex flex-col gap-4" @submit.prevent="check()">
+          <form v-if="mode === 'passkey'" class="flex flex-col gap-4" @submit.prevent="usePasskey">
+            <p v-if="passkeyMessage" class="text-sm text-red" role="alert">{{ passkeyMessage }}</p>
+            <Button
+              type="submit"
+              variant="primary"
+              :status="passkeyStatus"
+              loading-text="Waiting for your passkey"
+              success-text="Confirmed"
+            >
+              <template #leading><KeyRound /></template>
+              Use a passkey
+            </Button>
+          </form>
+
+          <form v-else-if="mode === 'app'" class="flex flex-col gap-4" @submit.prevent="check()">
             <InputCode
               v-model="code"
               label="Code from your authenticator app"
@@ -103,12 +152,15 @@ async function switchMode(to: 'app' | 'backup') {
             </Button>
           </form>
         </div>
-        <template #footer>
-          <Link v-if="mode === 'app'" as="button" class="py-1 text-xs text-black/65" @click="switchMode('backup')">
-            Use a backup code
-          </Link>
-          <Link v-else as="button" class="py-1 text-xs text-black/65" @click="switchMode('app')">
-            Use your authenticator app
+        <template v-if="others.length" #footer>
+          <Link
+            v-for="o in others"
+            :key="o.mode"
+            as="button"
+            class="py-1 text-xs text-black/65"
+            @click="switchMode(o.mode)"
+          >
+            {{ o.label }}
           </Link>
         </template>
       </Card>

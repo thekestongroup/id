@@ -31,13 +31,18 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	passkeys, err := a.store.PasskeyCount(r.Context(), cur.user.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	u := cur.user
 	name, _, _ := strings.Cut(u.Email, "@")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user": map[string]any{
 			"id": u.ID, "name": u.Name, "email": u.Email, "username": name, "organisation": u.Organisation,
 			"avatar": profile.PictureURL(a.cfg.Issuer, u.ID, u.PictureUpdatedAt), "role": u.Role,
-			"platformAdmin": u.PlatformAdmin, "status": u.Status, "mfa": u.TOTPEnabled,
+			"platformAdmin": u.PlatformAdmin, "status": u.Status, "mfa": u.TOTPEnabled || passkeys > 0, "passkeys": passkeys,
 			"createdAt": u.CreatedAt, "passwordChangedAt": u.PasswordChangedAt,
 			"support": u.IsSupport(), "expiresAt": u.ExpiresAt,
 		},
@@ -49,7 +54,10 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		// What this person may change themselves (their organisation decides).
 		"editable": org.ProfileEditing,
 		"security": map[string]any{
-			"mfa":               cur.user.TOTPEnabled,
+			// MFA is on with an authenticator app or any passkey.
+			"mfa":               cur.user.TOTPEnabled || passkeys > 0,
+			"authenticatorApp":  cur.user.TOTPEnabled,
+			"passkeys":          passkeys,
 			"backupCodesLeft":   len(cur.user.BackupCodes),
 			"passwordChangedAt": cur.user.PasswordChangedAt,
 			"passwordRules":     a.store.PolicyFor(r.Context(), cur.user.OrganisationID).Rules(),

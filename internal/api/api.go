@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/thekestongroup/id/internal/config"
@@ -29,10 +30,16 @@ type API struct {
 	// endSession signs a Keston ID session out of its apps (revokes their
 	// tokens, back-channel logout): oidcstore.Storage.EndSession.
 	endSession func(ctx context.Context, sessionID string) error
+	// Passkeys and security keys (passkeys.go).
+	webauthn *webauthn.WebAuthn
 }
 
 func New(s *store.Store, cfg *config.Config, endSession func(context.Context, string) error) *API {
-	return &API{store: s, cfg: cfg, endSession: endSession}
+	wa, err := newWebAuthn(cfg.Issuer)
+	if err != nil {
+		panic("webauthn: " + err.Error())
+	}
+	return &API{store: s, cfg: cfg, endSession: endSession, webauthn: wa}
 }
 
 func (a *API) Routes() http.Handler {
@@ -50,6 +57,7 @@ func (a *API) Routes() http.Handler {
 	r.Post("/sign-out", a.signOut)
 	r.Get("/accounts", a.accounts)
 	r.Post("/accounts/switch", a.switchAccount)
+	a.passkeyRoutes(r)
 
 	return r
 }
@@ -72,6 +80,7 @@ func (a *API) MeRoutes() http.Handler {
 	r.Post("/mfa/setup", a.mfaSetup)
 	r.Post("/mfa/enable", a.mfaEnable)
 	r.Post("/mfa/disable", a.mfaDisable)
+	a.passkeyAccountRoutes(r)
 	return r
 }
 

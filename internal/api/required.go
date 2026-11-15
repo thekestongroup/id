@@ -54,8 +54,13 @@ func (a *API) requiredActions(ctx context.Context, cur *current) ([]string, erro
 	}
 	// After an access pass, MFA is set up again (they may have lost their
 	// phone), whatever was there before.
-	viaPass := slices.Contains(cur.session.AMR, amrAccessPass) && !slices.Contains(cur.session.AMR, "otp")
-	if viaPass || (st.MFARequired && !cur.user.TOTPEnabled) {
+	viaPass := slices.Contains(cur.session.AMR, amrAccessPass) &&
+		!slices.Contains(cur.session.AMR, "otp") && !slices.Contains(cur.session.AMR, "hwk")
+	hasMFA, err := a.store.HasMFA(ctx, cur.user)
+	if err != nil {
+		return nil, err
+	}
+	if viaPass || (st.MFARequired && !hasMFA) {
 		out = append(out, ActionMFA)
 	}
 	return out, nil

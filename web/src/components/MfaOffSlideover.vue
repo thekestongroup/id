@@ -4,8 +4,12 @@ import { ref, watch } from 'vue'
 import { api } from '../lib/api'
 import { loadMe } from '../lib/session'
 
-/** Turning off MFA, which needs the password. */
+/**
+ * Turning off MFA, which needs the password. With passkeys, it's only the
+ * authenticator app that goes: MFA stays on with them.
+ */
 const open = defineModel<boolean>('open', { default: false })
+const props = defineProps<{ passkeys?: number }>()
 const { notify } = useNotifications()
 
 const password = ref('')
@@ -27,7 +31,9 @@ async function turnOff() {
     await api.mfaDisable(password.value)
     await loadMe(true)
     open.value = false
-    notify({ title: 'MFA is off', description: 'Only your password is needed to sign in now.' })
+    notify(props.passkeys
+      ? { title: 'Authenticator app removed', description: 'You use your passkeys after your password now.' }
+      : { title: 'MFA is off', description: 'Only your password is needed to sign in now.' })
   } catch (e) {
     status.value = 'idle'
     error.value = e instanceof Error ? e.message : String(e)
@@ -38,8 +44,12 @@ async function turnOff() {
 <template>
   <Slideover
     v-model:open="open"
-    title="Turn off MFA"
-    description="Anyone with your password could then sign in as you. Your backup codes will stop working."
+    :title="passkeys ? 'Turn off your authenticator app' : 'Turn off MFA'"
+    :description="
+      passkeys
+        ? 'You\'ll still use your passkeys after your password. Your backup codes will stop working.'
+        : 'Anyone with your password could then sign in as you. Your backup codes will stop working.'
+    "
     initial-focus="auto"
   >
     <template #body>

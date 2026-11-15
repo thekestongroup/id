@@ -27,6 +27,8 @@ type flowResponse struct {
 	User *userView `json:"user,omitempty"`
 	// step "actions": what they must do first, in order ("password", "mfa").
 	Actions []string `json:"actions,omitempty"`
+	// At the MFA step: the ways this account can do it.
+	MFA *mfaMethods `json:"mfa,omitempty"`
 }
 
 // next works out where someone goes from here: the heart of the sign-in flow.
@@ -52,6 +54,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 			res.Step = "sign-in"
 		case cur.session.Stage == store.StagePassword:
 			res.Step = "mfa"
+			res.MFA = a.mfaMethodsFor(ctx, cur.user)
 		case len(actions) > 0:
 			res.Step, res.Actions = "actions", actions
 		default:
@@ -101,6 +104,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 	}
 	if cur.session.Stage == store.StagePassword {
 		res.Step = "mfa"
+		res.MFA = a.mfaMethodsFor(ctx, cur.user)
 		return res, 0, ""
 	}
 	// Before consent and the app: a new password, MFA set up…
@@ -253,9 +257,15 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 		Success: true})
 
 	// Without MFA: straight to required actions, if any (next() settles
-	// the stage, and runs signedInFully once there are none).
+	// the stage, and runs signedInFully once there are none). With MFA (an
+	// authenticator app or a passkey), that comes first.
 	stage := store.StageActions
-	if user.TOTPEnabled {
+	hasMFA, err := a.store.HasMFA(ctx, user)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if hasMFA {
 		stage = store.StagePassword
 	}
 	token, sess, err := a.store.CreateSession(ctx, user.ID, stage, []string{"pwd"}, r.UserAgent(), clientIP(r),
@@ -283,7 +293,7 @@ func (a *API) mfa(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cur := a.current(r)
-	if cur == nil || cur.session.Stage != "password" {
+	if cur == nil || cur.session.Stage != store.StagePassword {
 		writeError(w, http.StatusUnauthorized, "signed_out", "Sign in again to continue.")
 		return
 	}
@@ -309,7 +319,7 @@ func (a *API) mfa(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ok = used
-	} else if cur.user.TOTPSecret != nil {
+	} else if cur.user.TOTPEnabled && cur.user.TOTPSecret != nil {
 		key, err := a.store.Box.Open(cur.user.TOTPSecret)
 		if err != nil {
 			serverError(w, r, err)
@@ -354,7 +364,7 @@ func (a *API) consent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cur := a.current(r)
-	if cur == nil || cur.session.Stage != "verified" {
+	if cur == nil || cur.session.Stage != store.StageVerified {
 		writeError(w, http.StatusUnauthorized, "signed_out", "Sign in again to continue.")
 		return
 	}

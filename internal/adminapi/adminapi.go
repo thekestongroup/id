@@ -92,6 +92,7 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermResetPassword)).Post("/users/{userID}/reset-password", a.resetPassword)
 		r.With(a.need(store.PermUserStatus)).Post("/users/{userID}/status", a.setStatus)
 		r.With(a.need(store.PermResetMFA)).Post("/users/{userID}/mfa/disable", a.disableMFA)
+		r.With(a.need(store.PermResetMFA)).Delete("/users/{userID}/passkeys", a.removePasskeys)
 		r.With(a.need(store.PermApps)).Get("/apps", a.listApps)
 		r.With(a.need(store.PermApps)).Put("/apps/{clientID}", a.putAppPolicy)
 		r.With(a.need(store.PermGroups)).Post("/groups", a.createGroup)
@@ -411,6 +412,8 @@ type userJSON struct {
 	PlatformAdmin bool   `json:"platformAdmin"`
 	Status        string `json:"status"`
 	MFA           bool   `json:"mfa"`
+	// Passkeys and security keys (see passkeys.go). MFA is on with any.
+	Passkeys      int    `json:"passkeys"`
 	Locked        bool   `json:"locked"`
 	CreatedAt     string `json:"createdAt"`
 	PasswordSetAt string `json:"passwordChangedAt"`
@@ -441,6 +444,11 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	passkeys, err := a.store.PasskeyCounts(r.Context(), organisation(r).ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	type row struct {
 		userJSON
 		// The caller can change them (see canChange).
@@ -451,7 +459,7 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 	for i := range users {
 		u := &users[i]
 		can := !u.IsSupport() && (admin || (u.Role != "global_admin" && mine.Covers(perms[u.ID].List())))
-		out[i] = row{a.userView(u), can}
+		out[i] = row{withPasskeys(a.userView(u), passkeys[u.ID]), can}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -704,7 +712,7 @@ func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
 		Groups      []store.Group `json:"groups"`
 		Permissions []string      `json:"permissions"`
 		CanChange   bool          `json:"canChange"`
-	}{a.userView(u), groups, perms.List(), canChange && !u.IsSupport()})
+	}{a.withPasskeyCount(r, a.userView(u)), groups, perms.List(), canChange && !u.IsSupport()})
 }
 
 // PATCH …/users/{id} {name?, username?, role?}: admins can always change
@@ -776,7 +784,7 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 		change("Role", roleLabel(u.Role), roleLabel(roleAfter))); s != "" {
 		a.audit(r, store.ActionUserUpdated, aboutUser(updated), s)
 	}
-	writeJSON(w, http.StatusOK, a.userView(updated))
+	writeJSON(w, http.StatusOK, a.withPasskeyCount(r, a.userView(updated)))
 }
 
 func (a *API) setUserPicture(w http.ResponseWriter, r *http.Request) {
@@ -800,7 +808,7 @@ func (a *API) setUserPicture(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(r, store.ActionUserPictureChanged, aboutUser(u), "")
 	updated, _ := a.store.UserByID(r.Context(), u.ID)
-	writeJSON(w, http.StatusOK, a.userView(updated))
+	writeJSON(w, http.StatusOK, a.withPasskeyCount(r, a.userView(updated)))
 }
 
 func (a *API) removeUserPicture(w http.ResponseWriter, r *http.Request) {
@@ -852,14 +860,20 @@ func decodeOptional(r *http.Request, v any) error {
 }
 
 // POST …/users/{id}/mfa/disable: turns off a user's MFA, for when they've
-// lost their authenticator and their backup codes. They then sign in with
-// their password only, and can set MFA up again in their Keston account.
+// lost their authenticator, backup codes or passkeys: the authenticator app
+// and every passkey and security key go. They then sign in with their
+// password only, and can set MFA up again in their Keston account.
 func (a *API) disableMFA(w http.ResponseWriter, r *http.Request) {
 	u := a.target(w, r)
 	if u == nil {
 		return
 	}
-	if !u.TOTPEnabled {
+	on, err := a.store.HasMFA(r.Context(), u)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if !on {
 		writeError(w, http.StatusConflict, "already_off", u.Name+" doesn't have MFA turned on.")
 		return
 	}
@@ -867,8 +881,14 @@ func (a *API) disableMFA(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	slog.Info("mfa turned off by an admin", "user", u.ID, "organisation", organisation(r).ID, "by", caller(r).ID)
+	removed, err := a.store.DeletePasskeys(r.Context(), u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	slog.Info("mfa turned off by an admin", "user", u.ID, "organisation", organisation(r).ID, "by", caller(r).ID,
+		"passkeys_removed", removed)
 	a.audit(r, store.ActionUserMFADisabled, aboutUser(u), "")
 	updated, _ := a.store.UserByID(r.Context(), u.ID)
-	writeJSON(w, http.StatusOK, a.userView(updated))
+	writeJSON(w, http.StatusOK, a.withPasskeyCount(r, a.userView(updated)))
 }
