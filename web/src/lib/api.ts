@@ -83,6 +83,8 @@ export interface SignedInAccount {
   name: string
   email: string
   organisation: string
+  /** Profile picture URL, if they have one. */
+  avatar?: string
   active: boolean
   needsMfa: boolean
 }

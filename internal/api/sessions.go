@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/store"
 )
 
@@ -108,7 +109,9 @@ type accountView struct {
 	Name         string `json:"name"`
 	Email        string `json:"email"`
 	Organisation string `json:"organisation"`
-	Active       bool   `json:"active"`
+	// Profile picture URL ("" for initials).
+	Avatar string `json:"avatar,omitempty"`
+	Active bool   `json:"active"`
 	// Signed in with a password, but not MFA yet.
 	NeedsMFA bool `json:"needsMfa"`
 }
@@ -118,7 +121,8 @@ func (a *API) accounts(w http.ResponseWriter, r *http.Request) {
 	out := []accountView{}
 	for i, c := range a.signedIn(r) {
 		out = append(out, accountView{ID: c.session.ID, Name: c.user.Name, Email: c.user.Email,
-			Organisation: c.user.Organisation, Active: i == 0, NeedsMFA: c.session.Stage != "verified"})
+			Organisation: c.user.Organisation, Active: i == 0,
+			Avatar: profile.PictureURL(a.cfg.Issuer, c.user.ID, c.user.PictureUpdatedAt), NeedsMFA: c.session.Stage != "verified"})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -70,7 +70,7 @@ function useAnother() {
               :disabled="!!choosing"
               @click="choose(account)"
             >
-              <Avatar :user="{ name: account.name }" size="md" decorative />
+              <Avatar :user="{ name: account.name, avatar: account.avatar }" size="md" decorative />
               <span class="flex min-w-0 flex-1 flex-col">
                 <span class="flex items-center gap-2">
                   <span class="truncate text-sm font-bold">{{ account.name }}</span>
