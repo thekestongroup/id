@@ -34,6 +34,7 @@ const (
 	ActionUserPasskeysRemoved = "user.passkeys_removed"
 	ActionUserDeleted         = "user.deleted"
 	ActionUserRestored        = "user.restored"
+	ActionUserLicences        = "user.licences_changed"
 	ActionPasswordChangeSet   = "user.password_change_required"
 	ActionAccessPassIssued    = "user.access_pass_issued"
 	ActionAccessPassRevoked   = "user.access_pass_revoked"
@@ -127,6 +128,7 @@ const (
 	ReasonMFAFailed      = "mfa_failed"
 	ReasonWrongPass      = "wrong_access_pass"
 	ReasonAppDisabled    = "app_disabled"
+	ReasonNoLicence      = "no_licence"
 )
 
 // SignIn is one sign-in attempt.

@@ -121,6 +121,13 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		return nil, http.StatusForbidden, client.Name + " is only for another organisation's accounts. " +
 			"Sign in with your account there, or ask the app's admins."
 	}
+	// A Keston product they have no licence for (Keston Admin → Users).
+	if ok, err := a.store.Licensed(ctx, cur.user, client.ID); err == nil && !ok {
+		a.logSignIn(r, store.SignIn{User: cur.user, Method: store.SignInApp, ClientID: client.ID,
+			Reason: store.ReasonNoLicence})
+		return nil, http.StatusForbidden, "You don't have a licence for " + client.Name +
+			". Ask one of " + cur.user.Organisation + "'s admins if you need it."
+	}
 	// Turned off for them by their organisation (Keston Admin → Apps).
 	if eff, err := a.store.EffectiveApps(ctx, cur.user); err == nil && eff[client.ID] == store.AppDisabled {
 		a.logSignIn(r, store.SignIn{User: cur.user, Method: store.SignInApp, ClientID: client.ID,

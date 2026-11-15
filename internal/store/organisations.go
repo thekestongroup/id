@@ -98,6 +98,11 @@ func (s *Store) CreateOrganisation(ctx context.Context, name, domain string, adm
 	if err != nil {
 		return nil, nil, err
 	}
+	// Its first admin has every product.
+	if _, err := tx.Exec(ctx, `INSERT INTO user_licences (user_id, client_id)
+		SELECT $1, id FROM clients WHERE builtin`, user.ID); err != nil {
+		return nil, nil, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, nil, err
 	}

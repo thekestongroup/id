@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -97,6 +98,8 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermResetMFA)).Post("/users/{userID}/mfa/disable", a.disableMFA)
 		r.With(a.need(store.PermResetMFA)).Delete("/users/{userID}/passkeys", a.removePasskeys)
 		r.With(a.need(store.PermDeleteUsers)).Delete("/users/{userID}", a.deleteUser)
+		r.With(a.need(store.PermViewUsers)).Get("/products", a.listProducts)
+		r.With(a.need(store.PermLicences)).Put("/users/{userID}/licences", a.putLicences)
 		r.With(a.need(store.PermResetPassword)).Post("/users/bulk/reset-password", a.bulkResetPassword)
 		r.With(a.need(store.PermUserStatus)).Post("/users/bulk/disable", a.bulkDisable)
 		r.With(a.need(store.PermUserStatus)).Post("/users/bulk/enable", a.bulkEnable)
@@ -462,17 +465,28 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	licences, err := a.store.LicencesInOrganisation(r.Context(), organisation(r).ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	type row struct {
 		userJSON
 		// The caller can change them (see canChange).
 		CanChange bool `json:"canChange"`
+		// The products they have a licence for.
+		Licences []string `json:"licences"`
 	}
 	mine, admin := callerPerms(r), caller(r).Role == "global_admin"
 	out := make([]row, len(users))
 	for i := range users {
 		u := &users[i]
 		can := !u.IsSupport() && (admin || (u.Role != "global_admin" && mine.Covers(perms[u.ID].List())))
-		out[i] = row{withPasskeys(a.userView(u), passkeys[u.ID]), can}
+		l := licences[u.ID]
+		if l == nil {
+			l = []string{}
+		}
+		out[i] = row{withPasskeys(a.userView(u), passkeys[u.ID]), can, l}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -489,9 +503,28 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		GeneratePassword bool `json:"generatePassword"`
 		// They choose their own password when they first sign in (default on).
 		RequirePasswordChange *bool `json:"requirePasswordChange"`
+		// The products they get a licence for (needs "Assign licences").
+		Licences []string `json:"licences"`
 	}
 	if !decode(w, r, &body) {
 		return
+	}
+	if len(body.Licences) > 0 && !can(r, store.PermLicences) {
+		writeFieldError(w, "licences", "You can't assign licences.")
+		return
+	}
+	if len(body.Licences) > 0 {
+		known, err := a.store.ProductIDs(r.Context())
+		if err != nil {
+			serverError(w, r, err)
+			return
+		}
+		for _, p := range body.Licences {
+			if !slices.Contains(known, p) {
+				writeFieldError(w, "licences", "Choose from Keston’s products")
+				return
+			}
+		}
 	}
 	name := strings.TrimSpace(body.Name)
 	user := normaliseUsername(body.Username)
@@ -541,6 +574,9 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("account created", "user", created.ID, "organisation", org.ID, "by", caller(r).ID)
 	a.audit(r, store.ActionUserCreated, aboutUser(created), "Role: "+roleLabel(created.Role))
+	if len(body.Licences) > 0 && !a.setLicences(w, r, created, body.Licences) {
+		return
+	}
 	if body.GeneratePassword {
 		writeJSON(w, http.StatusCreated, struct {
 			userJSON
@@ -737,12 +773,18 @@ func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	licences, err := a.store.Licences(ctx, u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, struct {
 		userJSON
 		Groups      []store.Group `json:"groups"`
 		Permissions []string      `json:"permissions"`
 		CanChange   bool          `json:"canChange"`
-	}{a.withPasskeyCount(r, a.userView(u)), groups, perms.List(), canChange && !u.IsSupport()})
+		Licences    []string      `json:"licences"`
+	}{a.withPasskeyCount(r, a.userView(u)), groups, perms.List(), canChange && !u.IsSupport(), licences})
 }
 
 // PATCH …/users/{id} {name?, username?, role?}: admins can always change

@@ -35,6 +35,7 @@ const (
 	PermAccessPass    = "users.access_pass"
 	PermUserStatus    = "users.status"
 	PermDeleteUsers   = "users.delete"
+	PermLicences      = "users.licences"
 	PermGroups        = "groups.manage"
 	PermAssign        = "permissions.assign"
 	PermApps          = "apps.manage"
@@ -53,6 +54,7 @@ var Permissions = []Permission{
 	{PermAccessPass, "Issue access passes", "A temporary code to sign in without a password or MFA, e.g. after losing a phone."},
 	{PermUserStatus, "Disable and enable users", "A disabled user can't sign in."},
 	{PermDeleteUsers, "Delete users", "And restore them from Deleted users within 30 days."},
+	{PermLicences, "Assign licences", "Which Keston products each user has, e.g. Keston Work."},
 	{PermGroups, "Manage groups", "Create, rename and delete groups, and choose who's in them."},
 	{PermAssign, "Give permissions", "Set a group's permissions, and who's in it, up to their own permissions."},
 	{PermApps, "Set app access", "Which apps users have (Apps)."},
@@ -63,7 +65,7 @@ var Permissions = []Permission{
 
 // needsView: permissions that act on users, which need seeing them too.
 var needsView = []string{PermCreateUsers, PermEditUsers, PermResetPassword, PermResetMFA, PermAccessPass, PermUserStatus,
-	PermDeleteUsers, PermGroups, PermAssign}
+	PermDeleteUsers, PermLicences, PermGroups, PermAssign}
 
 // CleanPermissions keeps known permissions only, sorted, adding "See users"
 // where another one needs it.

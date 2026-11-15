@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -180,6 +181,18 @@ func (s *Store) EffectiveApps(ctx context.Context, u *User) (map[string]string, 
 	}
 	for id, mode := range fromGroups {
 		out[id] = mode
+	}
+	// No licence, no access to a Keston product (support accounts aside).
+	if !u.IsSupport() {
+		have, err := s.Licences(ctx, u.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range builtin {
+			if !slices.Contains(have, c.ID) {
+				out[c.ID] = AppDisabled
+			}
+		}
 	}
 	return out, nil
 }

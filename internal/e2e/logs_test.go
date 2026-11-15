@@ -247,9 +247,9 @@ func TestLogs(t *testing.T) {
 
 	var viewer, plain struct{ ID string }
 	json.Unmarshal(e.must(adminTok, "POST", base+"/users", map[string]any{
-		"name": "Vic Viewer", "username": "vic", "password": pw, "requirePasswordChange": false}), &viewer)
+		"name": "Vic Viewer", "username": "vic", "password": pw, "requirePasswordChange": false, "licences": []string{"work"}}), &viewer)
 	json.Unmarshal(e.must(adminTok, "POST", base+"/users", map[string]any{
-		"name": "Pat Plain", "username": "pat", "password": pw, "requirePasswordChange": false}), &plain)
+		"name": "Pat Plain", "username": "pat", "password": pw, "requirePasswordChange": false, "licences": []string{"work"}}), &plain)
 	e.must(adminTok, "PUT", base+"/groups/"+g.ID+"/members/"+viewer.ID, nil)
 	// Pat can see users, but not logs.
 	g2, _ := e.st.CreateGroup(ctx, org.ID, "Helpers")
