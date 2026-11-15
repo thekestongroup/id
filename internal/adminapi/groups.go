@@ -50,6 +50,7 @@ func (a *API) createGroup(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	a.audit(r, store.ActionGroupCreated, aboutGroup(g), "")
 	writeJSON(w, http.StatusCreated, g)
 }
 
@@ -99,6 +100,7 @@ func (a *API) renameGroup(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	a.audit(r, store.ActionGroupRenamed, about{store.TargetGroup, g.ID, name}, change("Name", g.Name, name))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -130,6 +132,7 @@ func (a *API) deleteGroup(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	a.audit(r, store.ActionGroupDeleted, aboutGroup(g), "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -167,6 +170,7 @@ func (a *API) addMember(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	a.audit(r, store.ActionGroupMemberAdded, aboutUser(u), "Group: "+g.Name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -183,6 +187,7 @@ func (a *API) removeMember(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	a.audit(r, store.ActionGroupMemberRemoved, aboutUser(u), "Group: "+g.Name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -270,16 +275,29 @@ func (a *API) putAppPolicy(w http.ResponseWriter, r *http.Request) {
 	if body.GroupID != nil && *body.GroupID == "" {
 		body.GroupID = nil
 	}
+	scope := "Everyone"
 	if body.GroupID != nil {
-		if _, err := a.store.Group(ctx, org.ID, *body.GroupID); err != nil {
+		g, err := a.store.Group(ctx, org.ID, *body.GroupID)
+		if err != nil {
 			writeError(w, http.StatusNotFound, "not_found", "That group doesn't exist.")
 			return
+		}
+		scope = g.Name
+	}
+	before := ""
+	if policies, err := a.store.AppPolicies(ctx, org.ID); err == nil {
+		for _, p := range policies {
+			if p.ClientID == c.ID && (p.GroupID == nil) == (body.GroupID == nil) &&
+				(p.GroupID == nil || *p.GroupID == *body.GroupID) {
+				before = p.Mode
+			}
 		}
 	}
 	if err := a.store.SetAppPolicy(ctx, org.ID, body.GroupID, c.ID, body.Mode); err != nil {
 		serverError(w, r, err)
 		return
 	}
+	a.audit(r, store.ActionAppAccess, aboutApp(c), change(scope, modeLabel(before), modeLabel(body.Mode)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -313,6 +331,8 @@ func (a *API) putGroupPermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("group permissions changed", "group", g.ID, "permissions", perms, "by", caller(r).ID)
+	a.audit(r, store.ActionGroupPermissions, aboutGroup(g), change("Permissions", permLabels(g.Permissions),
+		permLabels(perms)))
 	updated, _ := a.store.Group(r.Context(), organisation(r).ID, g.ID)
 	writeJSON(w, http.StatusOK, updated)
 }

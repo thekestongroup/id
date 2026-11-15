@@ -38,6 +38,7 @@ const (
 	PermApps          = "apps.manage"
 	PermPolicy        = "policy.manage"
 	PermSettings      = "settings.manage"
+	PermReports       = "reports.view"
 )
 
 // Permissions, in the order Keston Admin shows them.
@@ -53,6 +54,7 @@ var Permissions = []Permission{
 	{PermApps, "Set app access", "Which apps users have (Apps)."},
 	{PermPolicy, "Set the password policy", "The rules for new passwords."},
 	{PermSettings, "Change settings", "What users can change in their own profiles."},
+	{PermReports, "See logs", "What admins did, and every sign-in, for the last year."},
 }
 
 // needsView: permissions that act on users, which need seeing them too.

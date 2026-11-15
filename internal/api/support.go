@@ -29,6 +29,9 @@ func (a *API) signedInFully(ctx context.Context, u *store.User) {
 		return
 	}
 	slog.Info("organisation deletion cancelled by sign-in", "organisation", u.OrganisationID, "user", u.ID)
+	a.store.Audit(ctx, store.AuditEntry{OrganisationID: u.OrganisationID, Actor: u,
+		Action: store.ActionDeletionCancelled, TargetType: store.TargetOrganisation, TargetID: u.OrganisationID,
+		TargetName: u.Organisation, Summary: "Cancelled by signing in"})
 	admins, err := a.store.GlobalAdmins(ctx, u.OrganisationID)
 	if err != nil {
 		return
@@ -78,6 +81,9 @@ func (a *API) SupportSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	sa, err := a.store.UserByID(ctx, h.SupportUser)
 	if err != nil || sa.SupportFor == nil || *sa.SupportFor != staff.ID || !sa.Usable() {
+		if err == nil && sa.SupportFor != nil && *sa.SupportFor == staff.ID {
+			a.logSignIn(r, store.SignIn{User: sa, Method: store.SignInSupport, Staff: staff, Reason: failReason(sa)})
+		}
 		fail("Support access has ended.")
 		return
 	}
@@ -89,6 +95,7 @@ func (a *API) SupportSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.addSession(w, r, token, sa.ID)
+	a.logSignIn(r, store.SignIn{User: sa, Method: store.SignInSupport, Staff: staff, Success: true})
 	slog.Info("support account signed in", "support_user", sa.ID, "staff", staff.ID, "organisation", h.Org)
 	// Back to Keston Admin (admin.… next to id.…), which signs in as it.
 	admin := strings.Replace(a.cfg.Issuer, "//id.", "//admin.", 1)
