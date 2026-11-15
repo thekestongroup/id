@@ -100,7 +100,10 @@ func (e *signinEnv) as(u *store.User, method, path string, body any, out any) in
 		r.With(a.need(store.PermResetPassword)).Post("/users/{userID}/reset-password", a.resetPassword)
 		r.With(a.need(store.PermPolicy)).Get("/mfa-policy", a.getMFAPolicy)
 		r.With(a.need(store.PermPolicy)).Put("/mfa-policy", a.putMFAPolicy)
-		r.With(a.need(store.PermPolicy)).Put("/mfa-policy/groups/{groupID}", a.putGroupMFAPolicy)
+		r.With(a.need(store.PermPolicy)).Post("/mfa-rules", a.saveMFARule)
+		r.With(a.need(store.PermPolicy)).Put("/mfa-rules/order", a.orderMFARules)
+		r.With(a.need(store.PermPolicy)).Put("/mfa-rules/{ruleID}", a.saveMFARule)
+		r.With(a.need(store.PermPolicy)).Delete("/mfa-rules/{ruleID}", a.deleteMFARule)
 		r.With(a.need(store.PermViewUsers)).Get("/users/{userID}/sign-in", a.getSignIn)
 		r.With(a.need(store.PermResetPassword)).Post("/users/{userID}/require-password-change", a.requirePasswordChange)
 		r.With(a.need(store.PermAccessPass)).Post("/users/{userID}/access-passes", a.createAccessPass)
@@ -124,7 +127,7 @@ func (e *signinEnv) as(u *store.User, method, path string, body any, out any) in
 }
 
 func (e *signinEnv) required(u *store.User) bool {
-	st, err := e.st.SignInState(context.Background(), u)
+	st, err := e.st.SignInState(context.Background(), u, store.SignInContext{})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -187,34 +190,54 @@ func TestMFAPolicyEndpoints(t *testing.T) {
 	g, _ := e.st.CreateGroup(ctx, e.org.ID, "Staff")
 	var p store.MFAPolicy
 	if n := e.as(admin, "PUT", "/mfa-policy", map[string]any{"required": true}, &p); n != 200 || !p.Required {
-		t.Fatalf("default: %d %+v", n, p)
+		t.Fatalf("everyone else: %d %+v", n, p)
 	}
-	if n := e.as(admin, "PUT", "/mfa-policy/groups/"+g.ID, map[string]any{"required": false}, &p); n != 200 {
-		t.Fatalf("group: %d", n)
+
+	// A rule: add, change, order, delete.
+	var rule store.MFARule
+	if n := e.as(admin, "POST", "/mfa-rules", map[string]any{"name": "Staff off site", "enabled": true, "require": true,
+		"groups": []string{g.ID}, "ipRanges": []string{"203.0.113.7", "10.0.0.0/8"}}, &rule); n != 201 {
+		t.Fatalf("add rule: %d", n)
 	}
-	found := false
-	for _, x := range p.Groups {
-		if x.ID == g.ID {
-			found = x.Required != nil && !*x.Required
-		}
+	if len(rule.IPRanges) != 2 || rule.IPRanges[0] != "203.0.113.7/32" {
+		t.Fatalf("ranges stored as %v", rule.IPRanges)
 	}
-	if !found {
-		t.Fatalf("group setting not saved: %+v", p.Groups)
+	if n := e.as(admin, "POST", "/mfa-rules", map[string]any{"name": "Bad", "enabled": true, "require": true,
+		"ipRanges": []string{"not an address"}}, nil); n != 422 {
+		t.Fatalf("bad range: %d", n)
 	}
-	if n := e.as(admin, "PUT", "/mfa-policy/groups/"+g.ID, map[string]any{"required": nil}, &p); n != 200 {
-		t.Fatalf("group back to default: %d", n)
+	if n := e.as(admin, "POST", "/mfa-rules", map[string]any{"name": "Bad", "enabled": true, "require": true,
+		"groups": []string{"00000000-0000-0000-0000-000000000000"}}, nil); n != 422 {
+		t.Fatalf("someone else's group: %d", n)
 	}
-	for _, x := range p.Groups {
-		if x.ID == g.ID && x.Required != nil {
-			t.Fatal("not back to the default")
-		}
+	var second store.MFARule
+	e.as(admin, "POST", "/mfa-rules", map[string]any{"name": "Everyone at school", "enabled": true, "require": false,
+		"ipRanges": []string{"198.51.100.0/24"}}, &second)
+	var rules []store.MFARule
+	if n := e.as(admin, "PUT", "/mfa-rules/order", map[string]any{"ids": []string{second.ID, rule.ID}}, &rules); n != 200 ||
+		rules[0].ID != second.ID {
+		t.Fatalf("order: %d %+v", n, rules)
 	}
-	if n := e.as(admin, "PUT", "/mfa-policy/groups/not-a-group", map[string]any{"required": true}, nil); n != 404 {
-		t.Fatalf("unknown group: %d", n)
+	if n := e.as(admin, "PUT", "/mfa-rules/order", map[string]any{"ids": []string{second.ID}}, nil); n != 400 {
+		t.Fatalf("order missing a rule: %d", n)
 	}
+	if n := e.as(admin, "PUT", "/mfa-rules/"+rule.ID, map[string]any{"name": "Renamed", "enabled": false, "require": true}, &rule); n != 200 ||
+		rule.Name != "Renamed" || rule.Enabled {
+		t.Fatalf("change: %d %+v", n, rule)
+	}
+	if n := e.as(admin, "DELETE", "/mfa-rules/"+second.ID, nil, nil); n != 204 {
+		t.Fatalf("delete: %d", n)
+	}
+	if n := e.as(admin, "DELETE", "/mfa-rules/"+second.ID, nil, nil); n != 404 {
+		t.Fatalf("delete again: %d", n)
+	}
+
 	noPerm := e.user("nope", store.PermViewUsers)
 	if n := e.as(noPerm, "PUT", "/mfa-policy", map[string]any{"required": false}, nil); n != 403 {
 		t.Fatalf("without permission: %d", n)
+	}
+	if n := e.as(noPerm, "POST", "/mfa-rules", map[string]any{"name": "x", "require": true}, nil); n != 403 {
+		t.Fatalf("rule without permission: %d", n)
 	}
 }
 

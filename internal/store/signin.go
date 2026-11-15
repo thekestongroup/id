@@ -31,20 +31,18 @@ type SignInState struct {
 
 // SignInState reads whether they must change their password, and whether
 // MFA is required for them (MFAMode): off, everyone (with the grace
-// period), or custom rules (any of their groups requiring it wins, then any
-// group not requiring it, then the organisation's default).
-func (s *Store) SignInState(ctx context.Context, u *User) (*SignInState, error) {
+// period), or custom rules (mfa_rules.go: the first matching rule, given
+// where they're signing in from and to, else "Everyone else").
+func (s *Store) SignInState(ctx context.Context, u *User, sc SignInContext) (*SignInState, error) {
 	var st SignInState
 	var mode string
 	var grace int
 	var start time.Time
-	var custom bool
+	var everyoneElse bool
 	err := s.DB.QueryRow(ctx, `SELECT u.password_change_required, o.mfa_mode, o.mfa_grace_days,
-		greatest(o.mfa_required_since, u.created_at),
-		coalesce((SELECT bool_or(g.mfa_required) FROM groups g JOIN group_members m ON m.group_id = g.id
-			WHERE m.user_id = u.id), o.mfa_required)
+		greatest(o.mfa_required_since, u.created_at), o.mfa_required
 		FROM users u JOIN organisations o ON o.id = u.organisation_id WHERE u.id = $1`, u.ID).
-		Scan(&st.PasswordChangeRequired, &mode, &grace, &start, &custom)
+		Scan(&st.PasswordChangeRequired, &mode, &grace, &start, &everyoneElse)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -56,7 +54,9 @@ func (s *Store) SignInState(ctx context.Context, u *User) (*SignInState, error) 
 			st.MFADeadline = &d
 		}
 	case MFACustom:
-		st.MFARequired = custom
+		if st.MFARequired, err = s.mfaByRules(ctx, u, sc, everyoneElse); err != nil {
+			return nil, err
+		}
 	}
 	return &st, nil
 }
@@ -123,17 +123,9 @@ func (s *Store) UsePendingTOTP(ctx context.Context, userID string, backupCodeHas
 	return err
 }
 
-// ── Require MFA (organisation default, per group) ────────────────────────
+// ── MFA mode (Keston Admin → Security → Manage MFA) ──────────────────────
 
-type GroupMFA struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	MemberCount int    `json:"memberCount"`
-	// nil: use the organisation's default.
-	Required *bool `json:"required"`
-}
-
-// MFA modes (Keston Admin → Settings → Multi-factor authentication).
+// MFA modes.
 const (
 	MFAOff      = "off"
 	MFARequired = "required"
@@ -145,9 +137,8 @@ type MFAPolicy struct {
 	Mode string `json:"mode"`
 	// Required: days to set up MFA before it's enforced (0: at next sign-in).
 	GracePeriodDays int `json:"gracePeriodDays"`
-	// Custom rules: the default, for everyone not covered by a group's rule.
-	Required bool       `json:"required"`
-	Groups   []GroupMFA `json:"groups"`
+	// Custom rules: "Everyone else", for anyone no rule matches.
+	Required bool `json:"required"`
 }
 
 func (s *Store) MFAPolicy(ctx context.Context, orgID string) (*MFAPolicy, error) {
@@ -156,14 +147,7 @@ func (s *Store) MFAPolicy(ctx context.Context, orgID string) (*MFAPolicy, error)
 		Scan(&p.Mode, &p.GracePeriodDays, &p.Required); err != nil {
 		return nil, notFound(err)
 	}
-	rows, err := s.DB.Query(ctx, `SELECT g.id::text, g.name,
-		(SELECT count(*) FROM group_members m WHERE m.group_id = g.id)::int, g.mfa_required
-		FROM groups g WHERE g.organisation_id = $1 ORDER BY lower(g.name)`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	p.Groups, err = pgx.CollectRows(rows, pgx.RowToStructByPos[GroupMFA])
-	return &p, err
+	return &p, nil
 }
 
 // SetMFAMode: switching to required starts the grace period from now.
@@ -184,16 +168,6 @@ func (s *Store) SetMFAGraceDays(ctx context.Context, orgID string, days int) err
 func (s *Store) SetMFARequired(ctx context.Context, orgID string, required bool) error {
 	_, err := s.DB.Exec(ctx, `UPDATE organisations SET mfa_required = $2, updated_at = now() WHERE id = $1`,
 		orgID, required)
-	return err
-}
-
-// SetGroupMFARequired: nil goes back to the organisation's default.
-func (s *Store) SetGroupMFARequired(ctx context.Context, orgID, groupID string, required *bool) error {
-	tag, err := s.DB.Exec(ctx, `UPDATE groups SET mfa_required = $3 WHERE organisation_id = $1 AND id::text = $2`,
-		orgID, groupID, required)
-	if err == nil && tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
 	return err
 }
 

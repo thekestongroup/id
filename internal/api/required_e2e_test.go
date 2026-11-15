@@ -205,7 +205,7 @@ func TestPasswordChangeRequired(t *testing.T) {
 	if code := b.do("GET", "/v1/me/", nil, nil); code != 200 {
 		t.Fatalf("/me after: %d", code)
 	}
-	st, _ := e.st.SignInState(ctx, u)
+	st, _ := e.st.SignInState(ctx, u, store.SignInContext{})
 	if st.PasswordChangeRequired {
 		t.Fatal("still required")
 	}
@@ -241,20 +241,22 @@ func TestMFARequiredPolicy(t *testing.T) {
 	alex, bo, cy := e.user("alex"), e.user("bo"), e.user("cy")
 	office, _ := e.st.CreateGroup(ctx, e.orgID, "Office")
 	staff, _ := e.st.CreateGroup(ctx, e.orgID, "Staff")
-	yes, no := true, false
 	_ = e.st.SetMFAMode(ctx, e.orgID, store.MFACustom)
-	_ = e.st.SetMFARequired(ctx, e.orgID, true)
-	_ = e.st.SetGroupMFARequired(ctx, e.orgID, office.ID, &no)
-	_ = e.st.SetGroupMFARequired(ctx, e.orgID, staff.ID, &yes)
-	_ = e.st.AddGroupMember(ctx, office.ID, bo.ID) // not required: the group overrides the default
-	_ = e.st.AddGroupMember(ctx, office.ID, cy.ID) // required: Staff requires it, and wins
+	_ = e.st.SetMFARequired(ctx, e.orgID, true) // everyone else
+	// Rules are tried in order: Staff needs MFA, then Office doesn't.
+	_, _ = e.st.SaveMFARule(ctx, e.orgID, store.MFARule{Name: "Staff", Enabled: true, Require: true,
+		Users: []string{}, Groups: []string{staff.ID}, Apps: []string{}, IPRanges: []string{}})
+	_, _ = e.st.SaveMFARule(ctx, e.orgID, store.MFARule{Name: "Office", Enabled: true, Require: false,
+		Users: []string{}, Groups: []string{office.ID}, Apps: []string{}, IPRanges: []string{}})
+	_ = e.st.AddGroupMember(ctx, office.ID, bo.ID) // Office: not required, instead of everyone else
+	_ = e.st.AddGroupMember(ctx, office.ID, cy.ID) // required: Staff comes first, and wins
 	_ = e.st.AddGroupMember(ctx, staff.ID, cy.ID)
 
 	for _, c := range []struct {
 		u    *store.User
 		want bool
 	}{{alex, true}, {bo, false}, {cy, true}} {
-		st, err := e.st.SignInState(ctx, c.u)
+		st, err := e.st.SignInState(ctx, c.u, store.SignInContext{})
 		if err != nil || st.MFARequired != c.want {
 			t.Fatalf("%s: required %v, want %v (%v)", c.u.Name, st.MFARequired, c.want, err)
 		}
@@ -483,5 +485,68 @@ func TestMFAGracePeriod(t *testing.T) {
 	_ = e.st.SetMFAMode(ctx, e.orgID, store.MFARequired)
 	if f := e.browser().signIn(u.Email, goodPassword, ""); f.MFAGraceUntil == nil {
 		t.Fatalf("on again: no grace period: %+v", f)
+	}
+}
+
+// Rules on the app and the address: the first matching rule decides, where
+// the person signs in from and to.
+func TestMFARulesByAppAndAddress(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	u, other := e.user("rue"), e.user("sam")
+	_ = e.st.SetMFAMode(ctx, e.orgID, store.MFACustom)
+	_ = e.st.SetMFARequired(ctx, e.orgID, false)
+	none := []string{}
+	save := func(r store.MFARule) {
+		t.Helper()
+		if r.Users == nil {
+			r.Users = none
+		}
+		if r.Groups == nil {
+			r.Groups = none
+		}
+		if r.Apps == nil {
+			r.Apps = none
+		}
+		if r.IPRanges == nil {
+			r.IPRanges = none
+		}
+		r.Enabled = true
+		if _, err := e.st.SaveMFARule(ctx, e.orgID, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// At school: no MFA. Anywhere else: Rue needs it for the payroll app.
+	save(store.MFARule{Name: "At school", Require: false, IPRanges: []string{"198.51.100.0/24"}})
+	save(store.MFARule{Name: "Rue and payroll", Require: true, Users: []string{u.ID}, Apps: []string{"payroll"}})
+
+	for _, c := range []struct {
+		name string
+		u    *store.User
+		sc   store.SignInContext
+		want bool
+	}{
+		{"at school, payroll", u, store.SignInContext{IP: "198.51.100.20", ClientID: "payroll"}, false},
+		{"away, payroll", u, store.SignInContext{IP: "203.0.113.9", ClientID: "payroll"}, true},
+		{"away, another app", u, store.SignInContext{IP: "203.0.113.9", ClientID: "work"}, false},
+		{"away, no app (Keston ID itself)", u, store.SignInContext{IP: "203.0.113.9"}, false},
+		{"someone else, away, payroll", other, store.SignInContext{IP: "203.0.113.9", ClientID: "payroll"}, false},
+		{"no address known", u, store.SignInContext{ClientID: "payroll"}, true},
+	} {
+		st, err := e.st.SignInState(ctx, u, c.sc)
+		if c.u != u {
+			st, err = e.st.SignInState(ctx, c.u, c.sc)
+		}
+		if err != nil || st.MFARequired != c.want {
+			t.Errorf("%s: required %v, want %v (%v)", c.name, st.MFARequired, c.want, err)
+		}
+	}
+
+	// A disabled rule is skipped.
+	rules, _ := e.st.MFARules(ctx, e.orgID)
+	rules[1].Enabled = false
+	_, _ = e.st.SaveMFARule(ctx, e.orgID, rules[1])
+	if st, _ := e.st.SignInState(ctx, u, store.SignInContext{IP: "203.0.113.9", ClientID: "payroll"}); st.MFARequired {
+		t.Error("a disabled rule still applied")
 	}
 }

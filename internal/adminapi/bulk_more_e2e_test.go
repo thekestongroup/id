@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/thekestongroup/id/internal/secret"
+	"github.com/thekestongroup/id/internal/store"
 )
 
 // One password for everyone, or each their own, and whether they must
@@ -30,7 +31,7 @@ func TestBulkResetOptions(t *testing.T) {
 		if ok, _ := secret.CheckPassword(got.PasswordHash, "Shared-Secret-917"); !ok {
 			t.Errorf("%s: the shared password doesn't work", got.Name)
 		}
-		if st, _ := e.st.SignInState(ctx, got); st.PasswordChangeRequired {
+		if st, _ := e.st.SignInState(ctx, got, store.SignInContext{}); st.PasswordChangeRequired {
 			t.Errorf("%s: change required, but requirePasswordChange was false", got.Name)
 		}
 	}
@@ -55,7 +56,7 @@ func TestBulkResetOptions(t *testing.T) {
 		t.Errorf("generated: %+v %+v", res[a.ID], res[b.ID])
 	}
 	got, _ := e.st.UserByID(ctx, a.ID)
-	if st, _ := e.st.SignInState(ctx, got); !st.PasswordChangeRequired {
+	if st, _ := e.st.SignInState(ctx, got, store.SignInContext{}); !st.PasswordChangeRequired {
 		t.Error("generated: change should be required by default")
 	}
 }
@@ -157,7 +158,7 @@ func TestBulkCreate(t *testing.T) {
 	if ok, _ := secret.CheckPassword(u.PasswordHash, amy.Password); !ok {
 		t.Error("Amy's password doesn't work")
 	}
-	if st, _ := e.st.SignInState(ctx, u); !st.PasswordChangeRequired {
+	if st, _ := e.st.SignInState(ctx, u, store.SignInContext{}); !st.PasswordChangeRequired {
 		t.Error("Amy should change her password at first sign-in")
 	}
 	if l, _ := e.st.Licences(ctx, u.ID); len(l) != 1 || l[0] != "work" {

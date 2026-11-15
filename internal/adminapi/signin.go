@@ -110,32 +110,6 @@ func requiredLabel(v *bool) string {
 	return "MFA not required"
 }
 
-// PUT …/mfa-policy/groups/{groupID} {required: true|false|null}: a group's
-// setting; null uses the default.
-func (a *API) putGroupMFAPolicy(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Required *bool `json:"required"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	err := a.store.SetGroupMFARequired(r.Context(), organisation(r).ID, chi.URLParam(r, "groupID"), body.Required)
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "not_found", "That group doesn't exist.")
-		return
-	}
-	if err != nil {
-		serverError(w, r, err)
-		return
-	}
-	slog.Info("group mfa requirement changed", "organisation", organisation(r).ID,
-		"group", chi.URLParam(r, "groupID"), "by", caller(r).ID)
-	if g, err := a.store.Group(r.Context(), organisation(r).ID, chi.URLParam(r, "groupID")); err == nil {
-		a.audit(r, store.ActionMFAPolicy, aboutGroup(g), g.Name+": "+requiredLabel(body.Required))
-	}
-	a.getMFAPolicy(w, r)
-}
-
 type accessPassJSON struct {
 	store.AccessPass
 	// Can still be used to sign in.
@@ -158,7 +132,7 @@ func (a *API) getSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	st, err := a.store.SignInState(ctx, u)
+	st, err := a.store.SignInState(ctx, u, store.SignInContext{})
 	if err != nil {
 		serverError(w, r, err)
 		return

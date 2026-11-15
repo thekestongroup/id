@@ -37,14 +37,15 @@ const (
 // amrAccessPass marks a session signed in with a temporary access pass.
 const amrAccessPass = "tap"
 
-// requiredActions: what's left for this session, in order.
-func (a *API) requiredActions(ctx context.Context, cur *current) ([]string, error) {
+// requiredActions: what's left for this session, in order. sc is where
+// they're signing in from and to, for MFA rules on addresses and apps.
+func (a *API) requiredActions(ctx context.Context, cur *current, sc store.SignInContext) ([]string, error) {
 	// Support accounts are opened by Keston staff from their own account,
 	// which has its own password and MFA.
 	if cur.user.IsSupport() {
 		return nil, nil
 	}
-	st, err := a.store.SignInState(ctx, cur.user)
+	st, err := a.store.SignInState(ctx, cur.user, sc)
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +64,18 @@ func (a *API) requiredActions(ctx context.Context, cur *current) ([]string, erro
 	switch {
 	case viaPass:
 		out = append(out, ActionMFA)
+	case st.MFARequired && !hasMFA && st.MFADeadline == nil:
+		// Needed now. Kept on the session, in case it depends on the app or
+		// address and the next request doesn't say which.
+		if !cur.session.MFAEnrolRequired {
+			if err := a.store.MarkMFAEnrolRequired(ctx, cur.session.ID); err != nil {
+				return nil, err
+			}
+			cur.session.MFAEnrolRequired = true
+		}
+		out = append(out, ActionMFA)
+	case cur.session.MFAEnrolRequired && !hasMFA:
+		out = append(out, ActionMFA)
 	case st.MFARequired && !hasMFA:
 		// In the grace period, "Not now" puts it off for this session.
 		if st.MFADeadline == nil || !time.Now().Before(*st.MFADeadline) || !cur.session.MFASkipped {
@@ -79,7 +92,7 @@ func (a *API) mfaGraceUntil(ctx context.Context, cur *current) *time.Time {
 		!slices.Contains(cur.session.AMR, "otp") && !slices.Contains(cur.session.AMR, "hwk")) {
 		return nil
 	}
-	st, err := a.store.SignInState(ctx, cur.user)
+	st, err := a.store.SignInState(ctx, cur.user, store.SignInContext{})
 	if err != nil || st.MFADeadline == nil || !time.Now().Before(*st.MFADeadline) {
 		return nil
 	}
@@ -114,11 +127,11 @@ func (a *API) requiredMFASkip(w http.ResponseWriter, r *http.Request) {
 
 // settle brings a signed-in session's stage up to date: 'actions' while any
 // are left, 'verified' once there are none. It returns what's left.
-func (a *API) settle(ctx context.Context, cur *current) ([]string, error) {
+func (a *API) settle(ctx context.Context, cur *current, sc store.SignInContext) ([]string, error) {
 	if cur.session.Stage == store.StagePassword {
 		return nil, nil
 	}
-	actions, err := a.requiredActions(ctx, cur)
+	actions, err := a.requiredActions(ctx, cur, sc)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +162,7 @@ func (a *API) inActions(w http.ResponseWriter, r *http.Request, action string) *
 		writeError(w, http.StatusUnauthorized, "signed_out", "Sign in again to continue.")
 		return nil
 	}
-	actions, err := a.settle(r.Context(), cur)
+	actions, err := a.settle(r.Context(), cur, store.SignInContext{IP: clientIP(r)})
 	if err != nil {
 		serverError(w, r, err)
 		return nil

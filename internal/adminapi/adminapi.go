@@ -133,7 +133,12 @@ func (a *API) Routes() http.Handler {
 		// Sign-in requirements and access passes (signin.go).
 		r.With(a.need(store.PermPolicy)).Get("/mfa-policy", a.getMFAPolicy)
 		r.With(a.need(store.PermPolicy)).Put("/mfa-policy", a.putMFAPolicy)
-		r.With(a.need(store.PermPolicy)).Put("/mfa-policy/groups/{groupID}", a.putGroupMFAPolicy)
+		r.With(a.need(store.PermPolicy)).Get("/mfa-rules", a.listMFARules)
+		r.With(a.need(store.PermPolicy)).Get("/mfa-rules/options", a.mfaRuleOptions)
+		r.With(a.need(store.PermPolicy)).Post("/mfa-rules", a.saveMFARule)
+		r.With(a.need(store.PermPolicy)).Put("/mfa-rules/order", a.orderMFARules)
+		r.With(a.need(store.PermPolicy)).Put("/mfa-rules/{ruleID}", a.saveMFARule)
+		r.With(a.need(store.PermPolicy)).Delete("/mfa-rules/{ruleID}", a.deleteMFARule)
 		r.With(a.need(store.PermViewUsers)).Get("/users/{userID}/sign-in", a.getSignIn)
 		r.With(a.need(store.PermResetPassword)).Post("/users/{userID}/require-password-change", a.requirePasswordChange)
 		r.With(a.need(store.PermAccessPass)).Post("/users/{userID}/access-passes", a.createAccessPass)

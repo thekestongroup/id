@@ -245,14 +245,17 @@ type Session struct {
 	ExpiresAt  time.Time
 	// "Not now" to setting up MFA during the grace period.
 	MFASkipped bool
+	// A rule (e.g. for an app) needed MFA here: set it up before going on.
+	MFAEnrolRequired bool
 }
 
-const sessionColumns = `id, user_id, stage, amr, auth_time, user_agent, ip, created_at, last_seen_at, expires_at, mfa_skipped`
+const sessionColumns = `id, user_id, stage, amr, auth_time, user_agent, ip, created_at, last_seen_at, expires_at, mfa_skipped,
+	mfa_enrol_required`
 
 func scanSession(row pgx.Row) (*Session, error) {
 	var x Session
 	if err := row.Scan(&x.ID, &x.UserID, &x.Stage, &x.AMR, &x.AuthTime, &x.UserAgent, &x.IP, &x.CreatedAt,
-		&x.LastSeenAt, &x.ExpiresAt, &x.MFASkipped); err != nil {
+		&x.LastSeenAt, &x.ExpiresAt, &x.MFASkipped, &x.MFAEnrolRequired); err != nil {
 		return nil, notFound(err)
 	}
 	return &x, nil

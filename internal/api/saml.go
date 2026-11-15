@@ -15,7 +15,7 @@ func (a *API) ActiveSessionID(r *http.Request) string {
 	if cur == nil {
 		return ""
 	}
-	if _, err := a.settle(r.Context(), cur); err != nil || cur.session.Stage != store.StageVerified {
+	if _, err := a.settle(r.Context(), cur, store.SignInContext{IP: clientIP(r)}); err != nil || cur.session.Stage != store.StageVerified {
 		return ""
 	}
 	return cur.session.ID

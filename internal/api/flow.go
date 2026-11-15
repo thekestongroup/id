@@ -45,8 +45,15 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		u := a.viewUser(cur.user)
 		res.User = &u
 		// Required actions (required.go): up to date before anything else.
+		// Where they're signing in from and to, for MFA rules.
+		sc := store.SignInContext{IP: clientIP(r)}
+		if authRequestID != "" {
+			if ar, err := a.store.AuthRequestByID(ctx, authRequestID); err == nil {
+				sc.ClientID = ar.ClientID
+			}
+		}
 		var err error
-		if actions, err = a.settle(ctx, cur); err != nil {
+		if actions, err = a.settle(ctx, cur, sc); err != nil {
 			return nil, http.StatusInternalServerError, "Something went wrong. Try again."
 		}
 	}

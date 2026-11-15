@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/thekestongroup/id/internal/secret"
+	"github.com/thekestongroup/id/internal/store"
 )
 
 // Adding a user with a password Keston ID makes up: it meets the policy, is
@@ -39,7 +40,7 @@ func TestCreateUserGeneratedPassword(t *testing.T) {
 	if ok, _ := secret.CheckPassword(u.PasswordHash, out.Password); !ok {
 		t.Error("the returned password doesn't match the stored one")
 	}
-	st, err := e.st.SignInState(ctx, u)
+	st, err := e.st.SignInState(ctx, u, store.SignInContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestCreateUserGeneratedPassword(t *testing.T) {
 	var kept struct{ ID string }
 	_ = json.Unmarshal(raw, &kept)
 	ku, _ := e.st.UserByID(ctx, kept.ID)
-	if st, _ := e.st.SignInState(ctx, ku); st.PasswordChangeRequired {
+	if st, _ := e.st.SignInState(ctx, ku, store.SignInContext{}); st.PasswordChangeRequired {
 		t.Error("requirePasswordChange: false should be respected for a generated password")
 	}
 
@@ -72,7 +73,7 @@ func TestCreateUserGeneratedPassword(t *testing.T) {
 		t.Error("a typed password shouldn't be returned")
 	}
 	tu, _ := e.st.UserByID(ctx, typed.ID)
-	if st, _ := e.st.SignInState(ctx, tu); st.PasswordChangeRequired {
+	if st, _ := e.st.SignInState(ctx, tu, store.SignInContext{}); st.PasswordChangeRequired {
 		t.Error("requirePasswordChange: false should be respected for a typed password")
 	}
 }

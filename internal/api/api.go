@@ -94,7 +94,7 @@ func (a *API) CookieSession(r *http.Request) (*store.Session, *store.User, strin
 	}
 	// An admin may have required something since (required.go): then it's
 	// not fully signed in any more.
-	if _, err := a.settle(r.Context(), cur); err != nil || cur.session.Stage != store.StageVerified {
+	if _, err := a.settle(r.Context(), cur, store.SignInContext{IP: clientIP(r)}); err != nil || cur.session.Stage != store.StageVerified {
 		return nil, nil, ""
 	}
 	return cur.session, cur.user, cur.token
