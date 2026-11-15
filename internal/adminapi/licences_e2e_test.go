@@ -119,6 +119,25 @@ func TestLicences(t *testing.T) {
 		t.Errorf("PUT licences without the permission: got %d", code)
 	}
 
+	// Their apps: Keston Work on for Lee, kept from Nina for want of a licence.
+	appAccess := func(id string) string {
+		var apps []struct{ ID, Access string }
+		_, raw := e.do(admin, http.MethodGet, "/users/"+id+"/apps", nil)
+		_ = json.Unmarshal(raw, &apps)
+		for _, a := range apps {
+			if a.ID == "work" {
+				return a.Access
+			}
+		}
+		return ""
+	}
+	if got := appAccess(lee.ID); got != store.AppForced {
+		t.Errorf("Lee's Keston Work: %q", got)
+	}
+	if got := appAccess(nina.ID); got != "no_licence" {
+		t.Errorf("Nina's Keston Work: %q", got)
+	}
+
 	// Audited.
 	var n int
 	_ = e.st.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = $1 AND target_id = $2`,

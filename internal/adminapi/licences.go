@@ -129,3 +129,46 @@ func (a *API) licenceSummary(ctx context.Context, added, removed []string) strin
 	}
 	return strings.Join(parts, ". ")
 }
+
+// GET …/users/{id}/apps: the apps this user has (or is kept from), as the
+// licences and app access settings work out for them: forced (always on),
+// enabled (on, and they can remove it), disabled (turned off by app
+// access), or no_licence (a Keston product they have no licence for). Apps
+// with no setting that they haven't signed in to aren't listed.
+func (a *API) userApps(w http.ResponseWriter, r *http.Request) {
+	u := a.target(w, r)
+	if u == nil {
+		return
+	}
+	ctx := r.Context()
+	eff, err := a.store.EffectiveApps(ctx, u)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	all, err := a.store.ClientsFor(ctx, u.OrganisationID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	type row struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Publisher string `json:"publisher"`
+		Access    string `json:"access"`
+	}
+	out := []row{}
+	for _, c := range all {
+		mode, ok := eff[c.ID]
+		if !ok || c.ID == ClientID {
+			continue
+		}
+		if mode == store.AppDisabled && c.Builtin {
+			if licensed, err := a.store.Licensed(ctx, u, c.ID); err == nil && !licensed {
+				mode = "no_licence"
+			}
+		}
+		out = append(out, row{c.ID, c.Name, c.Publisher, mode})
+	}
+	writeJSON(w, http.StatusOK, out)
+}

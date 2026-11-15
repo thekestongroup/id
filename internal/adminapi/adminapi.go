@@ -98,6 +98,7 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermResetMFA)).Delete("/users/{userID}/passkeys", a.removePasskeys)
 		r.With(a.need(store.PermDeleteUsers)).Delete("/users/{userID}", a.deleteUser)
 		r.With(a.need(store.PermViewUsers)).Get("/products", a.listProducts)
+		r.With(a.need(store.PermViewUsers)).Get("/users/{userID}/apps", a.userApps)
 		r.With(a.need(store.PermViewUsers)).Get("/roles", a.listRoles)
 		r.With(a.need(store.PermAssign)).Put("/users/{userID}/roles", a.putRoles)
 		r.With(a.need(store.PermLicences)).Put("/users/{userID}/licences", a.putLicences)
