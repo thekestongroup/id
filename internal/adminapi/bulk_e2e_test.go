@@ -26,6 +26,7 @@ import (
 
 	"github.com/thekestongroup/id/internal/db"
 	"github.com/thekestongroup/id/internal/policy"
+	"github.com/thekestongroup/id/internal/principal"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 	"github.com/thekestongroup/id/kit/auth"
@@ -67,14 +68,16 @@ func setup(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	pub := jose.JSONWebKey{Key: &key.PublicKey, KeyID: "k1", Algorithm: "RS256", Use: "sig"}
-	a := New(st, auth.NewVerifier(testIssuer, auth.AudienceKestonID, auth.StaticKeys{pub}), testIssuer)
+	a := New(st, testIssuer)
+	verifier := auth.NewVerifier(testIssuer, auth.AudienceKestonID, auth.StaticKeys{pub})
+	noCookie := func(*http.Request) (*store.Session, *store.User, string) { return nil, nil, "" }
 	domain := "t" + strings.ToLower(secret.Token()[:10]) + ".test"
 	org, _, err := st.CreateOrganisation(ctx, "Test School", domain, store.NewUser{
 		Email: "admin@" + domain, Name: "Ada Admin", PasswordHash: secret.HashPassword("x")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &env{t: t, st: st, api: a, h: a.Routes(), key: key, org: org}
+	return &env{t: t, st: st, api: a, h: principal.Middleware(st, verifier, noCookie)(a.Routes()), key: key, org: org}
 }
 
 func (e *env) user(username, role string) *store.User {
@@ -198,7 +201,9 @@ func TestDeleteAndRestore(t *testing.T) {
 	helpers := e.group("Helpers", store.PermUserStatus, store.PermDeleteUsers, store.PermResetPassword)
 	bosses := e.group("Bosses", store.PermPolicy)
 	pupils := e.group("Pupils")
-	for _, m := range [][2]string{{helpers.ID, helper.ID}, {bosses.ID, boss.ID}, {pupils.ID, alice.ID}} {
+	viewers := e.group("Viewers", store.PermViewUsers)
+	for _, m := range [][2]string{{helpers.ID, helper.ID}, {bosses.ID, boss.ID}, {pupils.ID, alice.ID},
+		{viewers.ID, bob.ID}} {
 		if err := e.st.AddGroupMember(ctx, m[0], m[1]); err != nil {
 			t.Fatal(err)
 		}
@@ -216,7 +221,7 @@ func TestDeleteAndRestore(t *testing.T) {
 	}
 	aliceToken := e.token(alice)
 
-	// Without "Delete users": refused outright.
+	// Seeing users but without "Delete users": refused outright.
 	if code, _ := e.do(bob, http.MethodPost, "/users/bulk/delete", map[string]any{"userIds": ids(alice)}); code != http.StatusForbidden {
 		t.Errorf("bob deleting: %d, want 403", code)
 	}
