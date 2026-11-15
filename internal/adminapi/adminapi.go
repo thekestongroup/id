@@ -103,6 +103,7 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermResetPassword)).Post("/users/bulk/reset-password", a.bulkResetPassword)
 		r.With(a.need(store.PermUserStatus)).Post("/users/bulk/disable", a.bulkDisable)
 		r.With(a.need(store.PermUserStatus)).Post("/users/bulk/enable", a.bulkEnable)
+		r.With(a.need(store.PermViewUsers)).Post("/users/bulk/groups", a.bulkGroups)
 		r.With(a.need(store.PermViewUsers)).Post("/users/bulk/add-to-group", a.bulkAddToGroup)
 		r.With(a.need(store.PermViewUsers)).Post("/users/bulk/remove-from-group", a.bulkRemoveFromGroup)
 		r.With(a.need(store.PermDeleteUsers)).Post("/users/bulk/delete", a.bulkDelete)

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thekestongroup/id/internal/policy"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 )
@@ -151,23 +152,50 @@ func (a *API) runBulk(w http.ResponseWriter, r *http.Request, ids []string, acti
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
-// POST …/users/bulk/reset-password: each user gets their own new password
-// (meeting the policy), returned once. They're unlocked and signed out
-// everywhere.
+// POST …/users/bulk/reset-password {userIds, password?, requirePasswordChange?}:
+// without a password, each user gets their own new one (meeting the
+// policy), returned once; with one, they all get that one (skipping anyone
+// it doesn't suit, e.g. it's their username). requirePasswordChange
+// defaults to on. They're unlocked and signed out everywhere.
 func (a *API) bulkResetPassword(w http.ResponseWriter, r *http.Request) {
 	pol := organisation(r).PasswordPolicy
-	ids, ok := userIDs(w, r)
-	if !ok {
+	var body struct {
+		UserIDs               []string `json:"userIds"`
+		Password              string   `json:"password"`
+		RequirePasswordChange *bool    `json:"requirePasswordChange"`
+	}
+	if !decode(w, r, &body) || !checkIDs(w, body.UserIDs) {
 		return
 	}
-	a.runBulk(w, r, ids, "password reset", false, func(u *store.User, res *bulkResult) (string, error) {
+	mustChange := body.RequirePasswordChange == nil || *body.RequirePasswordChange
+	if body.Password != "" {
+		// The rules that don't depend on the user, checked once up front.
+		if failed := pol.Check(body.Password, ""); len(failed) > 0 {
+			writeFieldError(w, "password", policy.Message(failed))
+			return
+		}
+	}
+	a.runBulk(w, r, body.UserIDs, "password reset", false, func(u *store.User, res *bulkResult) (string, error) {
 		username, _, _ := strings.Cut(u.Email, "@")
-		pw := pol.Generate(normaliseUsername(username))
+		username = normaliseUsername(username)
+		pw := body.Password
+		if pw == "" {
+			pw = pol.Generate(username)
+			res.Password = pw
+		} else if failed := pol.Check(pw, username); len(failed) > 0 {
+			return "The password doesn't suit them: " + policy.Message(failed), nil
+		}
 		if err := a.store.ResetPassword(r.Context(), u.ID, secret.HashPassword(pw)); err != nil {
 			return "", err
 		}
-		res.Password = pw
-		a.audit(r, store.ActionUserPasswordReset, aboutUser(u), "Bulk action")
+		if err := a.store.SetPasswordChangeRequired(r.Context(), u.ID, mustChange); err != nil {
+			return "", err
+		}
+		summary := "Bulk action"
+		if body.Password != "" {
+			summary = "Bulk action, the same password for everyone"
+		}
+		a.audit(r, store.ActionUserPasswordReset, aboutUser(u), summary)
 		return "", nil
 	})
 }
@@ -256,6 +284,95 @@ func (a *API) bulkGroup(add bool) http.HandlerFunc {
 			return "", nil
 		})
 	}
+}
+
+// POST …/users/bulk/groups {userIds, add: [groupId], remove: [groupId]}:
+// adds everyone to some groups and takes them out of others, in one go.
+// Each group must be one the caller may change who's in (mayChangeGroup).
+func (a *API) bulkGroups(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		UserIDs []string `json:"userIds"`
+		Add     []string `json:"add"`
+		Remove  []string `json:"remove"`
+	}
+	if !decode(w, r, &body) || !checkIDs(w, body.UserIDs) {
+		return
+	}
+	if len(body.Add)+len(body.Remove) == 0 {
+		writeFieldError(w, "add", "Choose at least one group")
+		return
+	}
+	ctx := r.Context()
+	load := func(ids []string, field string) ([]*store.Group, bool) {
+		out := []*store.Group{}
+		for _, id := range ids {
+			g, err := a.store.Group(ctx, organisation(r).ID, id)
+			if err != nil {
+				writeFieldError(w, field, "Choose from your groups")
+				return nil, false
+			}
+			if !mayChangeGroup(w, r, g) {
+				return nil, false
+			}
+			out = append(out, g)
+		}
+		return out, true
+	}
+	add, ok := load(body.Add, "add")
+	if !ok {
+		return
+	}
+	remove, ok := load(body.Remove, "remove")
+	if !ok {
+		return
+	}
+	for _, g := range add {
+		for _, h := range remove {
+			if g.ID == h.ID {
+				writeFieldError(w, "remove", g.Name+" is in both lists")
+				return
+			}
+		}
+	}
+	members := map[string]map[string]bool{}
+	for _, g := range append(append([]*store.Group{}, add...), remove...) {
+		list, err := a.store.GroupMembers(ctx, g.ID)
+		if err != nil {
+			serverError(w, r, err)
+			return
+		}
+		members[g.ID] = map[string]bool{}
+		for _, m := range list {
+			members[g.ID][m.ID] = true
+		}
+	}
+	a.runBulk(w, r, body.UserIDs, "group memberships", false, func(u *store.User, _ *bulkResult) (string, error) {
+		changed := false
+		for _, g := range add {
+			if members[g.ID][u.ID] {
+				continue
+			}
+			if err := a.store.AddGroupMember(ctx, g.ID, u.ID); err != nil {
+				return "", err
+			}
+			a.audit(r, store.ActionGroupMemberAdded, aboutUser(u), "Group: "+g.Name)
+			changed = true
+		}
+		for _, g := range remove {
+			if !members[g.ID][u.ID] {
+				continue
+			}
+			if err := a.store.RemoveGroupMember(ctx, g.ID, u.ID); err != nil {
+				return "", err
+			}
+			a.audit(r, store.ActionGroupMemberRemoved, aboutUser(u), "Group: "+g.Name)
+			changed = true
+		}
+		if !changed {
+			return "Already in or out of those groups.", nil
+		}
+		return "", nil
+	})
 }
 
 func (a *API) bulkAddToGroup(w http.ResponseWriter, r *http.Request)      { a.bulkGroup(true)(w, r) }
