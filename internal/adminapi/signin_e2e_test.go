@@ -28,14 +28,14 @@ import (
 
 const pw = "correct horse battery staple"
 
-type env struct {
+type signinEnv struct {
 	t   *testing.T
 	st  *store.Store
 	a   *API
 	org *store.Organisation
 }
 
-func setup(t *testing.T) *env {
+func signinSetup(t *testing.T) *signinEnv {
 	t.Helper()
 	url := os.Getenv("KESTON_ID_TEST_DATABASE_URL")
 	if url == "" {
@@ -58,10 +58,10 @@ func setup(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &env{t: t, st: st, a: New(st, "http://id.test"), org: org}
+	return &signinEnv{t: t, st: st, a: New(st, "http://id.test"), org: org}
 }
 
-func (e *env) user(name string, perms ...string) *store.User {
+func (e *signinEnv) user(name string, perms ...string) *store.User {
 	e.t.Helper()
 	ctx := context.Background()
 	u, err := e.st.CreateUser(ctx, e.st.DB, store.NewUser{OrganisationID: e.org.ID, Email: name + "@" + e.org.Domain,
@@ -82,7 +82,7 @@ func (e *env) user(name string, perms ...string) *store.User {
 
 // as: a request from this user, through the same permission checks as
 // Routes() (requireView, need), with the handlers under test.
-func (e *env) as(u *store.User, method, path string, body any, out any) int {
+func (e *signinEnv) as(u *store.User, method, path string, body any, out any) int {
 	e.t.Helper()
 	ctx := context.Background()
 	u, _ = e.st.UserByID(ctx, u.ID)
@@ -123,7 +123,7 @@ func (e *env) as(u *store.User, method, path string, body any, out any) int {
 	return rec.Code
 }
 
-func (e *env) required(u *store.User) bool {
+func (e *signinEnv) required(u *store.User) bool {
 	st, err := e.st.SignInState(context.Background(), u)
 	if err != nil {
 		e.t.Fatal(err)
@@ -132,7 +132,7 @@ func (e *env) required(u *store.User) bool {
 }
 
 func TestPasswordChangeTickBox(t *testing.T) {
-	e := setup(t)
+	e := signinSetup(t)
 	admin := e.user("helpdesk", store.PermCreateUsers, store.PermResetPassword)
 
 	var created struct{ ID string }
@@ -181,7 +181,7 @@ func TestPasswordChangeTickBox(t *testing.T) {
 }
 
 func TestMFAPolicyEndpoints(t *testing.T) {
-	e := setup(t)
+	e := signinSetup(t)
 	ctx := context.Background()
 	admin := e.user("sec", store.PermPolicy)
 	g, _ := e.st.CreateGroup(ctx, e.org.ID, "Staff")
@@ -219,7 +219,7 @@ func TestMFAPolicyEndpoints(t *testing.T) {
 }
 
 func TestAccessPassEndpoints(t *testing.T) {
-	e := setup(t)
+	e := signinSetup(t)
 	ctx := context.Background()
 	issuer := e.user("issuer", store.PermAccessPass)
 	target := e.user("target")

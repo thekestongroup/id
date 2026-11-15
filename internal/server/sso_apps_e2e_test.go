@@ -24,6 +24,7 @@ import (
 	"html"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -81,7 +82,9 @@ func setup(t *testing.T) *env {
 	st := store.New(pool, box)
 
 	srv := httptest.NewUnstartedServer(nil)
-	issuer := "http://" + srv.Listener.Addr().String()
+	// localhost, not 127.0.0.1: passkeys need a domain for their RP ID.
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	issuer := "http://localhost:" + port
 	cfg := &config.Config{Issuer: issuer, SecretKey: key, Insecure: true, AccessTokenTTL: 15 * time.Minute,
 		IDTokenTTL: time.Hour, RefreshTokenTTL: time.Hour, SessionTTL: time.Hour, AuthRequestTTL: 30 * time.Minute}
 	storage := oidcstore.New(st, cfg)

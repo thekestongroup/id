@@ -2,6 +2,7 @@ package adminapi
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -42,7 +43,18 @@ func (a *API) putMFAPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("mfa requirement changed", "organisation", organisation(r).ID, "required", body.Required,
 		"by", caller(r).ID)
+	a.audit(r, store.ActionMFAPolicy, aboutOrg(organisation(r)), "Everyone: "+requiredLabel(&body.Required))
 	a.getMFAPolicy(w, r)
+}
+
+func requiredLabel(v *bool) string {
+	switch {
+	case v == nil:
+		return "Use the default"
+	case *v:
+		return "MFA required"
+	}
+	return "MFA not required"
 }
 
 // PUT …/mfa-policy/groups/{groupID} {required: true|false|null}: a group's
@@ -65,6 +77,9 @@ func (a *API) putGroupMFAPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("group mfa requirement changed", "organisation", organisation(r).ID,
 		"group", chi.URLParam(r, "groupID"), "by", caller(r).ID)
+	if g, err := a.store.Group(r.Context(), organisation(r).ID, chi.URLParam(r, "groupID")); err == nil {
+		a.audit(r, store.ActionMFAPolicy, aboutGroup(g), g.Name+": "+requiredLabel(body.Required))
+	}
 	a.getMFAPolicy(w, r)
 }
 
@@ -127,6 +142,11 @@ func (a *API) requirePasswordChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("password change requirement set", "user", u.ID, "required", required, "by", caller(r).ID)
+	if required {
+		a.audit(r, store.ActionPasswordChangeSet, aboutUser(u), "At their next sign-in")
+	} else {
+		a.audit(r, store.ActionPasswordChangeSet, aboutUser(u), "No longer required")
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -170,6 +190,11 @@ func (a *API) createAccessPass(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("access pass issued", "user", u.ID, "pass", pass.ID, "oneTime", body.OneTime, "hours", body.Hours,
 		"by", caller(r).ID)
+	kind := "Reusable"
+	if body.OneTime {
+		kind = "One-time"
+	}
+	a.audit(r, store.ActionAccessPassIssued, aboutUser(u), fmt.Sprintf("%s, for %d hours", kind, body.Hours))
 	writeJSON(w, http.StatusCreated, map[string]any{"code": code, "pass": accessPassJSON{*pass, true}})
 }
 
@@ -189,5 +214,6 @@ func (a *API) revokeAccessPass(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("access pass revoked", "user", u.ID, "pass", chi.URLParam(r, "passID"), "by", caller(r).ID)
+	a.audit(r, store.ActionAccessPassRevoked, aboutUser(u), "")
 	w.WriteHeader(http.StatusNoContent)
 }

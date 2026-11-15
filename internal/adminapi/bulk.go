@@ -167,6 +167,7 @@ func (a *API) bulkResetPassword(w http.ResponseWriter, r *http.Request) {
 			return "", err
 		}
 		res.Password = pw
+		a.audit(r, store.ActionUserPasswordReset, aboutUser(u), "Bulk action")
 		return "", nil
 	})
 }
@@ -184,7 +185,15 @@ func (a *API) bulkStatus(status string) http.HandlerFunc {
 			if u.Status == status {
 				return map[string]string{"active": "Already enabled.", "disabled": "Already disabled."}[status], nil
 			}
-			return "", a.store.SetUserStatus(r.Context(), u.ID, status)
+			if err := a.store.SetUserStatus(r.Context(), u.ID, status); err != nil {
+				return "", err
+			}
+			action := store.ActionUserEnabled
+			if status == "disabled" {
+				action = store.ActionUserDisabled
+			}
+			a.audit(r, action, aboutUser(u), change("Status", statusLabel(u.Status), statusLabel(status))+" (bulk action)")
+			return "", nil
 		})
 	}
 }
@@ -231,12 +240,20 @@ func (a *API) bulkGroup(add bool) http.HandlerFunc {
 				if in[u.ID] {
 					return "Already in " + g.Name + ".", nil
 				}
-				return "", a.store.AddGroupMember(r.Context(), g.ID, u.ID)
+				if err := a.store.AddGroupMember(r.Context(), g.ID, u.ID); err != nil {
+					return "", err
+				}
+				a.audit(r, store.ActionGroupMemberAdded, aboutUser(u), "Group: "+g.Name)
+				return "", nil
 			}
 			if !in[u.ID] {
 				return "Not in " + g.Name + ".", nil
 			}
-			return "", a.store.RemoveGroupMember(r.Context(), g.ID, u.ID)
+			if err := a.store.RemoveGroupMember(r.Context(), g.ID, u.ID); err != nil {
+				return "", err
+			}
+			a.audit(r, store.ActionGroupMemberRemoved, aboutUser(u), "Group: "+g.Name)
+			return "", nil
 		})
 	}
 }
@@ -259,6 +276,7 @@ func (a *API) deleteOne(r *http.Request, u *store.User) (string, error) {
 		return "", err
 	}
 	slog.Info("user deleted", "user", u.ID, "organisation", organisation(r).ID, "by", caller(r).ID)
+	a.audit(r, store.ActionUserDeleted, aboutUser(u), "Can be restored for 30 days")
 	return "", nil
 }
 
@@ -329,6 +347,9 @@ func (a *API) bulkRestore(w http.ResponseWriter, r *http.Request) {
 		err := a.store.RestoreUser(r.Context(), organisation(r).ID, u.ID)
 		if errors.Is(err, store.ErrNotFound) {
 			return "Not found.", nil
+		}
+		if err == nil {
+			a.audit(r, store.ActionUserRestored, aboutUser(u), "")
 		}
 		return "", err
 	})

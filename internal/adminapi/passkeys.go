@@ -1,8 +1,11 @@
 package adminapi
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+
+	"github.com/thekestongroup/id/internal/store"
 )
 
 // Passkeys and security keys: Keston Admin shows how many a user has, and
@@ -42,6 +45,7 @@ func (a *API) removePasskeys(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("passkeys removed by an admin", "user", u.ID, "organisation", organisation(r).ID, "by", caller(r).ID,
 		"passkeys_removed", removed)
+	a.audit(r, store.ActionUserPasskeysRemoved, aboutUser(u), fmt.Sprintf("%d removed", removed))
 	updated, _ := a.store.UserByID(r.Context(), u.ID)
 	writeJSON(w, http.StatusOK, a.withPasskeyCount(r, a.userView(updated)))
 }

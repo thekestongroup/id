@@ -317,6 +317,7 @@ func (a *API) saveOwnApp(w http.ResponseWriter, r *http.Request, c *store.Client
 		serverError(w, r, err)
 		return
 	}
+	a.auditOwnApp(r, status, saved)
 	a.writeOwnApp(w, r, status, saved, newSecret)
 }
 
@@ -399,6 +400,7 @@ func (a *API) saveSAMLApp(w http.ResponseWriter, r *http.Request, c *store.Clien
 		serverError(w, r, err)
 		return
 	}
+	a.auditOwnApp(r, status, saved)
 	a.writeOwnApp(w, r, status, saved, "")
 }
 
@@ -412,6 +414,7 @@ func (a *API) deleteOwnApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("own app deleted", "app", c.ID, "organisation", organisation(r).ID, "by", caller(r).ID)
+	a.audit(r, store.ActionOwnAppDeleted, aboutApp(c), "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -431,6 +434,7 @@ func (a *API) newOwnAppSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("own app secret changed", "app", c.ID, "by", caller(r).ID)
+	a.audit(r, store.ActionOwnAppSecret, aboutApp(c), "The old secret stopped working")
 	c, _ = a.store.OrganisationClient(r.Context(), organisation(r).ID, c.ID)
 	a.writeOwnApp(w, r, http.StatusOK, c, value)
 }
@@ -498,4 +502,13 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func (a *API) auditOwnApp(r *http.Request, status int, c *store.Client) {
+	kind := map[string]string{"oidc": "OpenID Connect", "saml": "SAML"}[c.Protocol]
+	if status == http.StatusCreated {
+		a.audit(r, store.ActionOwnAppCreated, aboutApp(c), kind)
+	} else {
+		a.audit(r, store.ActionOwnAppUpdated, aboutApp(c), kind)
+	}
 }
