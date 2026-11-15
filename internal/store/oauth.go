@@ -382,3 +382,10 @@ func (s *Store) EndSessionApps(ctx context.Context, sessionID string) ([]Session
 	}
 	return apps, tx.Commit(ctx)
 }
+
+// SessionForAccessToken is the Keston ID session an access token was issued
+// under, if it has one and it's still live.
+func (s *Store) SessionForAccessToken(ctx context.Context, tokenID string) (*Session, error) {
+	return scanSession(s.DB.QueryRow(ctx, `SELECT `+sessionColumns+` FROM sessions
+		WHERE id = (SELECT session_id FROM access_tokens WHERE id = $1) AND expires_at > now()`, tokenID))
+}

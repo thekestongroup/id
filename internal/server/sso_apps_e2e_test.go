@@ -287,7 +287,7 @@ func (e *env) admin(email, orgID string) *adminAPI {
 
 func (a *adminAPI) call(method, path string, body any, out any) int {
 	a.b.e.t.Helper()
-	resp, data := a.b.do(method, "/admin/v1/organisations/"+a.org+path, body,
+	resp, data := a.b.do(method, "/v1/organisations/"+a.org+path, body,
 		map[string]string{"Authorization": "Bearer " + a.token})
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil && resp.StatusCode < 300 {
