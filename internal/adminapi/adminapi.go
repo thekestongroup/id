@@ -24,11 +24,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/thekestongroup/id/internal/policy"
+	"github.com/thekestongroup/id/internal/principal"
 	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 	"github.com/thekestongroup/id/kit/apierr"
-	"github.com/thekestongroup/id/kit/auth"
 )
 
 // ClientID is Keston Admin's OAuth client (not set per app on the Apps page).
@@ -37,23 +37,22 @@ const ClientID = "admin"
 // VerifyToken checks an access token's signature, issuer and expiry.
 
 type API struct {
-	store  *store.Store
-	verify *auth.Verifier
+	store *store.Store
 	// Keston ID's address, for profile picture URLs.
 	issuer string
 }
 
-// New: verify checks access tokens for Keston ID's API (audience
-// auth.AudienceKestonID).
-func New(s *store.Store, verify *auth.Verifier, issuer string) *API {
-	return &API{store: s, verify: verify, issuer: issuer}
+// New: the organisation and admin parts of Keston ID's API (/v1). The
+// caller comes from principal.Middleware (an access token or Keston ID's
+// session cookie).
+func New(s *store.Store, issuer string) *API {
+	return &API{store: s, issuer: issuer}
 }
 
 func (a *API) Routes() http.Handler {
 	r := chi.NewRouter()
-	r.Use(noStore, a.authenticate)
+	r.Use(noStore)
 
-	r.Get("/me", a.me)
 	r.Get("/password-rules", a.baselineRules)
 	r.Post("/password-check", a.passwordCheck)
 	r.Get("/domains/{domain}", a.domainAvailable)
@@ -127,61 +126,18 @@ func (a *API) Routes() http.Handler {
 type ctxKey int
 
 const (
-	userKey ctxKey = iota
-	orgKey
-	permsKey
+	orgKey ctxKey = iota
 )
 
-func caller(r *http.Request) *store.User { return r.Context().Value(userKey).(*store.User) }
+func caller(r *http.Request) *store.User { return principal.From(r.Context()).User }
 
 // callerPerms: what the caller can do in Keston Admin, in their own
 // organisation.
-func callerPerms(r *http.Request) store.Perms { return r.Context().Value(permsKey).(store.Perms) }
+func callerPerms(r *http.Request) store.Perms { return principal.From(r.Context()).Perms }
 func organisation(r *http.Request) *store.Organisation {
 	return r.Context().Value(orgKey).(*store.Organisation)
 }
 
-func (a *API) authenticate(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || token == "" {
-			writeError(w, http.StatusUnauthorized, "signed_out", "Sign in to continue.")
-			return
-		}
-		// A Keston ID access token for this API (kit/auth: signature, issuer,
-		// audience, expiry), from Keston Admin or another of Keston's apps.
-		claims, err := a.verify.Verify(r.Context(), token)
-		if err != nil {
-			apierr.Unauthorized(w)
-			return
-		}
-		// Keston ID can also check it hasn't been revoked (signed out, access
-		// removed, disabled) and use the user's current permissions rather
-		// than the token's; other products rely on tokens being short-lived.
-		if _, userID, _, err := a.store.AccessTokenActive(r.Context(), claims.TokenID); err != nil || userID == nil ||
-			*userID != claims.Subject {
-			writeError(w, http.StatusUnauthorized, "signed_out", "Your session has ended. Sign in again.")
-			return
-		}
-		user, err := a.store.UserByID(r.Context(), claims.Subject)
-		if err != nil || !user.Usable() {
-			writeError(w, http.StatusUnauthorized, "signed_out", "Your session has ended. Sign in again.")
-			return
-		}
-		perms, err := a.store.PermissionsOf(r.Context(), user)
-		if err != nil {
-			serverError(w, r, err)
-			return
-		}
-		if !user.PlatformAdmin && len(perms) == 0 {
-			writeError(w, http.StatusForbidden, "not_admin",
-				"Keston Admin is for your organisation's admins. Ask one of them if you need something changed.")
-			return
-		}
-		ctx := context.WithValue(r.Context(), userKey, user)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, permsKey, perms)))
-	})
-}
 
 // isOwnAdmin: a global admin of this organisation (including a Keston
 // support account in it, while access lasts).
@@ -295,16 +251,6 @@ const usernameHelp = "Use lowercase letters, numbers, dots, dashes or underscore
 
 // ── Handlers: you and the rules ──────────────────────────────────────────
 
-func (a *API) me(w http.ResponseWriter, r *http.Request) {
-	u := caller(r)
-	org, _ := a.store.OrganisationByID(r.Context(), u.OrganisationID)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"user":          a.userView(u),
-		"platformAdmin": u.PlatformAdmin,
-		"organisation":  org,
-		"permissions":   callerPerms(r).List(),
-	})
-}
 
 // The baseline rules, for a new organisation (which has no rules of its own yet).
 func (a *API) baselineRules(w http.ResponseWriter, _ *http.Request) {

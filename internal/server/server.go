@@ -25,6 +25,7 @@ import (
 	"github.com/thekestongroup/id/internal/api"
 	"github.com/thekestongroup/id/internal/config"
 	"github.com/thekestongroup/id/internal/oidcstore"
+	"github.com/thekestongroup/id/internal/principal"
 	"github.com/thekestongroup/id/internal/store"
 	"github.com/thekestongroup/id/kit/auth"
 )
@@ -86,10 +87,11 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 		w.Write(data)
 	})
 
-	// Keston Admin's API. Caddy serves it at admin.keston.co/api/…, so the
-	// admin app calls it on its own origin (no CORS).
-	// Checked with kit/auth like every Keston API, against Keston ID's own
-	// keys (no HTTP round trip to itself).
+	// Keston ID's API, /v1: the same endpoints for every app. Keston Admin
+	// reaches it at admin.keston.co/api/… (Caddy, same origin), the account
+	// pages here with the session cookie, other apps with access tokens.
+	// Tokens are checked with kit/auth like every Keston API, against Keston
+	// ID's own keys (no HTTP round trip to itself).
 	ownKeys := auth.KeysFunc(func(ctx context.Context) ([]jose.JSONWebKey, error) {
 		keys, err := storage.KeySet(ctx)
 		if err != nil {
@@ -101,11 +103,17 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 		}
 		return out, nil
 	})
-	admin := adminapi.New(st, auth.NewVerifier(cfg.Issuer, auth.AudienceKestonID, ownKeys), cfg.Issuer)
-	// Self-service sign-up: no sign-in (rate limited). Mounted first, so it
-	// isn't behind the admin API's token check.
-	r.Mount("/admin/v1/public", admin.PublicRoutes())
-	r.Mount("/admin/v1", admin.Routes())
+	verifier := auth.NewVerifier(cfg.Issuer, auth.AudienceKestonID, ownKeys)
+	admin := adminapi.New(st, cfg.Issuer)
+	r.Route("/v1", func(r chi.Router) {
+		// Self-service sign-up: no sign-in (rate limited).
+		r.Mount("/public", admin.PublicRoutes())
+		r.Group(func(r chi.Router) {
+			r.Use(principal.Middleware(st, verifier, a.CookieSession))
+			r.Mount("/me", a.MeRoutes())
+			r.Mount("/", admin.Routes())
+		})
+	})
 
 	// Cancel on the consent prompt, or prompt=none that needs interaction:
 	// send the OAuth error back to the app.
