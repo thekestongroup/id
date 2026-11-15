@@ -150,7 +150,9 @@ func (s *Store) SetProfileEditing(ctx context.Context, orgID string, p ProfileEd
 // domain, or creates it (with no users yet).
 func (s *Store) EnsurePlatformOrganisation(ctx context.Context, name, domain string) (*Organisation, error) {
 	var id string
-	err := s.DB.QueryRow(ctx, `SELECT id FROM organisations WHERE is_platform`).Scan(&id)
+	// Already there: keep its name and domain in line with the config.
+	err := s.DB.QueryRow(ctx, `UPDATE organisations SET name = $1, domain = lower($2) WHERE is_platform
+		RETURNING id`, name, domain).Scan(&id)
 	if err == nil {
 		return s.OrganisationByID(ctx, id)
 	}

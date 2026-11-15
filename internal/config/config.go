@@ -46,7 +46,7 @@ func Load() (*Config, error) {
 		DatabaseURL:     env("KESTON_ID_DATABASE_URL", "postgres://keston:keston@localhost:5432/keston_id?sslmode=disable"),
 		DevWebURL:       os.Getenv("KESTON_ID_DEV_WEB_URL"),
 		PlatformName:    env("KESTON_ID_PLATFORM_NAME", "The Keston Group"),
-		PlatformDomain:  env("KESTON_ID_PLATFORM_DOMAIN", "keston.co"),
+		PlatformDomain:  env("KESTON_ID_PLATFORM_DOMAIN", "thekestongroup.com"),
 		AccessTokenTTL:  15 * time.Minute,
 		IDTokenTTL:      time.Hour,
 		RefreshTokenTTL: 30 * 24 * time.Hour,
