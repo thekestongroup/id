@@ -93,6 +93,15 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermUserStatus)).Post("/users/{userID}/status", a.setStatus)
 		r.With(a.need(store.PermResetMFA)).Post("/users/{userID}/mfa/disable", a.disableMFA)
 		r.With(a.need(store.PermResetMFA)).Delete("/users/{userID}/passkeys", a.removePasskeys)
+		r.With(a.need(store.PermDeleteUsers)).Delete("/users/{userID}", a.deleteUser)
+		r.With(a.need(store.PermResetPassword)).Post("/users/bulk/reset-password", a.bulkResetPassword)
+		r.With(a.need(store.PermUserStatus)).Post("/users/bulk/disable", a.bulkDisable)
+		r.With(a.need(store.PermUserStatus)).Post("/users/bulk/enable", a.bulkEnable)
+		r.With(a.need(store.PermViewUsers)).Post("/users/bulk/add-to-group", a.bulkAddToGroup)
+		r.With(a.need(store.PermViewUsers)).Post("/users/bulk/remove-from-group", a.bulkRemoveFromGroup)
+		r.With(a.need(store.PermDeleteUsers)).Post("/users/bulk/delete", a.bulkDelete)
+		r.With(a.need(store.PermViewUsers)).Get("/deleted-users", a.listDeletedUsers)
+		r.With(a.need(store.PermDeleteUsers)).Post("/deleted-users/restore", a.bulkRestore)
 		r.With(a.need(store.PermApps)).Get("/apps", a.listApps)
 		r.With(a.need(store.PermApps)).Put("/apps/{clientID}", a.putAppPolicy)
 		r.With(a.need(store.PermGroups)).Post("/groups", a.createGroup)
@@ -503,6 +512,11 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		PasswordHash: secret.HashPassword(body.Password),
 	})
 	if isUniqueViolation(err) {
+		if existing, _ := a.store.UserByEmail(r.Context(), user+"@"+org.Domain); existing != nil &&
+			existing.Status == "deleted" {
+			writeFieldError(w, "username", user+"@"+org.Domain+" was deleted recently. Restore them from Deleted users instead.")
+			return
+		}
 		writeFieldError(w, "username", user+"@"+org.Domain+" already exists.")
 		return
 	}
@@ -524,7 +538,7 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 // target is an account in the organisation in the URL.
 func (a *API) target(w http.ResponseWriter, r *http.Request) *store.User {
 	u, err := a.store.UserByID(r.Context(), chi.URLParam(r, "userID"))
-	if err != nil || u.OrganisationID != organisation(r).ID {
+	if err != nil || u.OrganisationID != organisation(r).ID || u.Status == "deleted" {
 		writeError(w, http.StatusNotFound, "not_found", "That user doesn't exist.")
 		return nil
 	}

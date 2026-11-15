@@ -255,6 +255,11 @@ func (a *API) Housekeeping(ctx context.Context) {
 			slog.Info("organisation deleted after 14 days", "organisation", n)
 		}
 	}
+	if n, err := a.store.PurgeDeletedUsers(ctx); err != nil {
+		slog.Warn("deleted user housekeeping", "error", err)
+	} else if n > 0 {
+		slog.Info("deleted users removed after 30 days", "count", n)
+	}
 	done, err := a.store.CompleteDueLockouts(ctx)
 	if err != nil {
 		slog.Warn("lockout housekeeping", "error", err)

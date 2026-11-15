@@ -113,7 +113,8 @@ func (s *Store) CreateUser(ctx context.Context, q Querier, n NewUser) (*User, er
 }
 
 func (s *Store) UsersInOrganisation(ctx context.Context, orgID string) ([]User, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+userColumns+` FROM users WHERE organisation_id = $1 ORDER BY name`, orgID)
+	rows, err := s.DB.Query(ctx, `SELECT `+userColumns+` FROM users WHERE organisation_id = $1 AND status <> 'deleted'
+		ORDER BY name`, orgID)
 	if err != nil {
 		return nil, err
 	}

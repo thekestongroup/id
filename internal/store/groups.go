@@ -18,7 +18,8 @@ type Group struct {
 	Permissions []string `json:"permissions"`
 }
 
-const groupColumns = `g.id, g.name, (SELECT count(*) FROM group_members m WHERE m.group_id = g.id), g.created_at,
+const groupColumns = `g.id, g.name, (SELECT count(*) FROM group_members m JOIN users u ON u.id = m.user_id
+		WHERE m.group_id = g.id AND u.status <> 'deleted'), g.created_at,
 	ARRAY(SELECT p.permission FROM group_permissions p WHERE p.group_id = g.id ORDER BY p.permission)`
 
 func (s *Store) Groups(ctx context.Context, orgID string) ([]Group, error) {
@@ -65,7 +66,7 @@ func (s *Store) DeleteGroup(ctx context.Context, orgID, groupID string) error {
 
 func (s *Store) GroupMembers(ctx context.Context, groupID string) ([]User, error) {
 	rows, err := s.DB.Query(ctx, `SELECT `+userColumns+` FROM users
-		WHERE id IN (SELECT user_id FROM group_members WHERE group_id = $1) ORDER BY name`, groupID)
+		WHERE id IN (SELECT user_id FROM group_members WHERE group_id = $1) AND status <> 'deleted' ORDER BY name`, groupID)
 	if err != nil {
 		return nil, err
 	}
