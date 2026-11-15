@@ -99,6 +99,8 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermResetMFA)).Delete("/users/{userID}/passkeys", a.removePasskeys)
 		r.With(a.need(store.PermDeleteUsers)).Delete("/users/{userID}", a.deleteUser)
 		r.With(a.need(store.PermViewUsers)).Get("/products", a.listProducts)
+		r.With(a.need(store.PermViewUsers)).Get("/roles", a.listRoles)
+		r.With(a.need(store.PermAssign)).Put("/users/{userID}/roles", a.putRoles)
 		r.With(a.need(store.PermLicences)).Put("/users/{userID}/licences", a.putLicences)
 		r.With(a.need(store.PermResetPassword)).Post("/users/bulk/reset-password", a.bulkResetPassword)
 		r.With(a.need(store.PermUserStatus)).Post("/users/bulk/disable", a.bulkDisable)
@@ -472,12 +474,19 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	roles, err := a.store.RolesInOrganisation(r.Context(), organisation(r).ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	type row struct {
 		userJSON
 		// The caller can change them (see canChange).
 		CanChange bool `json:"canChange"`
 		// The products they have a licence for.
 		Licences []string `json:"licences"`
+		// Their admin roles (besides global admin).
+		Roles []string `json:"roles"`
 	}
 	mine, admin := callerPerms(r), caller(r).Role == "global_admin"
 	out := make([]row, len(users))
@@ -488,7 +497,11 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 		if l == nil {
 			l = []string{}
 		}
-		out[i] = row{withPasskeys(a.userView(u), passkeys[u.ID]), can, l}
+		rs := roles[u.ID]
+		if rs == nil {
+			rs = []string{}
+		}
+		out[i] = row{withPasskeys(a.userView(u), passkeys[u.ID]), can, l, rs}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -507,11 +520,13 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		RequirePasswordChange *bool `json:"requirePasswordChange"`
 		// The products they get a licence for (needs "Assign licences").
 		Licences []string `json:"licences"`
+		// Admin roles (store/roles.go), besides global admin (Role).
+		Roles []string `json:"roles"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	if !a.checkProducts(w, r, body.Licences) {
+	if !a.checkProducts(w, r, body.Licences) || !checkRoles(w, r, body.Roles) {
 		return
 	}
 	name := strings.TrimSpace(body.Name)
@@ -563,6 +578,9 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 	slog.Info("account created", "user", created.ID, "organisation", org.ID, "by", caller(r).ID)
 	a.audit(r, store.ActionUserCreated, aboutUser(created), "Role: "+roleLabel(created.Role))
 	if len(body.Licences) > 0 && !a.setLicences(w, r, created, body.Licences) {
+		return
+	}
+	if len(body.Roles) > 0 && body.Role != "global_admin" && !a.applyRoles(w, r, created, body.Roles) {
 		return
 	}
 	if body.GeneratePassword {
@@ -766,13 +784,19 @@ func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	roles, err := a.store.RolesOf(ctx, u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, struct {
 		userJSON
 		Groups      []store.Group `json:"groups"`
 		Permissions []string      `json:"permissions"`
 		CanChange   bool          `json:"canChange"`
 		Licences    []string      `json:"licences"`
-	}{a.withPasskeyCount(r, a.userView(u)), groups, perms.List(), canChange && !u.IsSupport(), licences})
+		Roles       []string      `json:"roles"`
+	}{a.withPasskeyCount(r, a.userView(u)), groups, perms.List(), canChange && !u.IsSupport(), licences, roles})
 }
 
 // PATCH …/users/{id} {name?, username?, role?}: admins can always change

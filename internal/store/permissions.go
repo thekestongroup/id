@@ -110,8 +110,8 @@ func (p Perms) List() []string {
 }
 
 // PermissionsOf: what someone can do in Keston Admin, in their own
-// organisation: everything for a global admin, otherwise what their
-// groups give them.
+// organisation: everything for a global admin, otherwise what their admin
+// roles and groups give them.
 func (s *Store) PermissionsOf(ctx context.Context, u *User) (Perms, error) {
 	out := Perms{}
 	if u.Role == "global_admin" {
@@ -130,6 +130,13 @@ func (s *Store) PermissionsOf(ctx context.Context, u *User) (Perms, error) {
 		return nil, err
 	}
 	for _, id := range ids {
+		out[id] = true
+	}
+	roles, err := s.RolesOf(ctx, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range RolePermissions(roles) {
 		out[id] = true
 	}
 	return out, nil
@@ -180,5 +187,20 @@ func (s *Store) PermissionsInOrganisation(ctx context.Context, orgID string) (ma
 		out[userID][perm] = true
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	roles, err := s.RolesInOrganisation(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	for userID, rs := range roles {
+		if out[userID] == nil {
+			out[userID] = Perms{}
+		}
+		for _, p := range RolePermissions(rs) {
+			out[userID][p] = true
+		}
+	}
+	return out, nil
 }
