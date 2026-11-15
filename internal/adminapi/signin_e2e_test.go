@@ -2,7 +2,7 @@
 
 // End-to-end tests for sign-in requirements in Keston Admin's API: the
 // real handlers and permission checks against a real Postgres. Signing in
-// (access tokens) is replaced by putting the caller in the context.
+// (principal.Middleware) is replaced by putting the caller in the context.
 //
 //	KESTON_ID_TEST_DATABASE_URL=postgres://keston:keston@localhost:55420/keston_id?sslmode=disable \
 //	  go test -tags e2e ./internal/adminapi/
@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/thekestongroup/id/internal/db"
+	"github.com/thekestongroup/id/internal/principal"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 )
@@ -57,7 +58,7 @@ func setup(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &env{t: t, st: st, a: New(st, nil, "http://id.test"), org: org}
+	return &env{t: t, st: st, a: New(st, "http://id.test"), org: org}
 }
 
 func (e *env) user(name string, perms ...string) *store.User {
@@ -89,8 +90,7 @@ func (e *env) as(u *store.User, method, path string, body any, out any) int {
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			c := context.WithValue(r.Context(), userKey, u)
-			next.ServeHTTP(w, r.WithContext(context.WithValue(c, permsKey, perms)))
+			next.ServeHTTP(w, r.WithContext(principal.With(r.Context(), &principal.Caller{User: u, Perms: perms})))
 		})
 	})
 	a := e.a

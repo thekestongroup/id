@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/jackc/pgx/v5/pgconn"
 	"log/slog"
 	"net"
 	"net/http"
@@ -16,8 +15,10 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/thekestongroup/id/internal/config"
+	"github.com/thekestongroup/id/internal/principal"
 	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/store"
 )
@@ -50,22 +51,43 @@ func (a *API) Routes() http.Handler {
 	r.Get("/accounts", a.accounts)
 	r.Post("/accounts/switch", a.switchAccount)
 
-	r.Group(func(r chi.Router) {
-		r.Use(a.requireVerified)
-		r.Get("/me", a.me)
-		r.Get("/me/apps", a.apps)
-		r.Delete("/me/apps/{clientID}", a.revokeApp)
-		r.Get("/me/sessions", a.sessions)
-		r.Delete("/me/sessions/{sessionID}", a.signOutDevice)
-		r.Patch("/me", a.updateProfile)
-		r.Put("/me/picture", a.setPicture)
-		r.Delete("/me/picture", a.removePicture)
-		r.Post("/me/password", a.changePassword)
-		r.Post("/me/mfa/setup", a.mfaSetup)
-		r.Post("/me/mfa/enable", a.mfaEnable)
-		r.Post("/me/mfa/disable", a.mfaDisable)
-	})
 	return r
+}
+
+// MeRoutes is your own account, in Keston ID's API at /v1/me: the same
+// endpoints for the account pages (session cookie) and apps (access
+// tokens). The caller comes from principal.Middleware.
+func (a *API) MeRoutes() http.Handler {
+	r := chi.NewRouter()
+	r.Use(noStore)
+	r.Get("/", a.me)
+	r.Patch("/", a.updateProfile)
+	r.Get("/apps", a.apps)
+	r.Delete("/apps/{clientID}", a.revokeApp)
+	r.Get("/sessions", a.sessions)
+	r.Delete("/sessions/{sessionID}", a.signOutDevice)
+	r.Put("/picture", a.setPicture)
+	r.Delete("/picture", a.removePicture)
+	r.Post("/password", a.changePassword)
+	r.Post("/mfa/setup", a.mfaSetup)
+	r.Post("/mfa/enable", a.mfaEnable)
+	r.Post("/mfa/disable", a.mfaDisable)
+	return r
+}
+
+// CookieSession is the browser's active, fully signed-in account, for
+// principal.Middleware (Keston ID's own pages calling /v1).
+func (a *API) CookieSession(r *http.Request) (*store.Session, *store.User, string) {
+	cur := a.current(r)
+	if cur == nil {
+		return nil, nil, ""
+	}
+	// An admin may have required something since (required.go): then it's
+	// not fully signed in any more.
+	if _, err := a.settle(r.Context(), cur); err != nil || cur.session.Stage != store.StageVerified {
+		return nil, nil, ""
+	}
+	return cur.session, cur.user, cur.token
 }
 
 // ── Middleware ───────────────────────────────────────────────────────────
@@ -89,33 +111,27 @@ func csrf(next http.Handler) http.Handler {
 	})
 }
 
-type ctxKey struct{}
-
 type current struct {
 	session *store.Session
 	user    *store.User
 	token   string
 }
 
-func (a *API) requireVerified(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cur := a.current(r)
-		if cur != nil {
-			// An admin may have required something since (required.go).
-			if _, err := a.settle(r.Context(), cur); err != nil {
-				serverError(w, r, err)
-				return
-			}
-		}
-		if cur == nil || cur.session.Stage != "verified" {
-			writeError(w, http.StatusUnauthorized, "signed_out", "Sign in to continue.")
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, cur)))
-	})
+// from: the caller of a /v1/me endpoint (principal.Middleware). session is
+// nil for an access token issued without one; token is the session cookie's,
+// empty for access tokens.
+func from(r *http.Request) *current {
+	c := principal.From(r.Context())
+	return &current{session: c.Session, user: c.User, token: c.SessionToken}
 }
 
-func from(r *http.Request) *current { return r.Context().Value(ctxKey{}).(*current) }
+// sessionID is the caller's Keston ID session, or "".
+func (c *current) sessionID() string {
+	if c.session == nil {
+		return ""
+	}
+	return c.session.ID
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 

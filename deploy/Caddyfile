@@ -28,11 +28,11 @@
 }
 
 # Keston Admin: the web app (the "admin" container, from the admin repo),
-# with Keston ID's admin API on the same origin at /api.
+# with Keston ID's API (/v1) on the same origin at /api.
 {$KESTON_ADMIN_SITE} {
 	encode zstd gzip
 	handle_path /api/* {
-		rewrite * /admin/v1{uri}
+		rewrite * /v1{uri}
 		reverse_proxy {
 			dynamic a {
 				name keston-id

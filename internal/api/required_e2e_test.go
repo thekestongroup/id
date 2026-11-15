@@ -23,6 +23,7 @@ import (
 
 	"github.com/thekestongroup/id/internal/config"
 	"github.com/thekestongroup/id/internal/db"
+	"github.com/thekestongroup/id/internal/principal"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 )
@@ -57,6 +58,8 @@ func setup(t *testing.T) *env {
 	a := New(st, cfg, func(context.Context, string) error { return nil })
 	mux := http.NewServeMux()
 	mux.Handle("/api/", http.StripPrefix("/api", a.Routes()))
+	// /v1/me as server.go mounts it (cookie callers only here).
+	mux.Handle("/v1/me/", http.StripPrefix("/v1/me", principal.Middleware(st, nil, a.CookieSession)(a.MeRoutes())))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -98,7 +101,10 @@ func (b *browser) do(method, path string, body any, out any) int {
 	if body != nil {
 		_ = json.NewEncoder(&buf).Encode(body)
 	}
-	req, _ := http.NewRequest(method, b.e.srv.URL+"/api"+path, &buf)
+	if !strings.HasPrefix(path, "/v1/") {
+		path = "/api" + path
+	}
+	req, _ := http.NewRequest(method, b.e.srv.URL+path, &buf)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Keston-ID", "1")
 	res, err := b.c.Do(req)
@@ -174,7 +180,7 @@ func TestPasswordChangeRequired(t *testing.T) {
 	wantActions(t, f, ActionPassword)
 
 	// Not fully signed in: no account pages, no MFA endpoint.
-	if code := b.do("GET", "/me", nil, nil); code != 401 {
+	if code := b.do("GET", "/v1/me/", nil, nil); code != 401 {
 		t.Fatalf("/me before the action: %d", code)
 	}
 	if code := b.do("POST", "/required/mfa/setup", map[string]any{}, nil); code != 409 {
@@ -193,7 +199,7 @@ func TestPasswordChangeRequired(t *testing.T) {
 		f.Step != "account" {
 		t.Fatalf("new password: %d %+v", code, f)
 	}
-	if code := b.do("GET", "/me", nil, nil); code != 200 {
+	if code := b.do("GET", "/v1/me/", nil, nil); code != 200 {
 		t.Fatalf("/me after: %d", code)
 	}
 	st, _ := e.st.SignInState(ctx, u)
@@ -214,11 +220,11 @@ func TestRequiredLaterDemotesSession(t *testing.T) {
 	if f := b.signIn(u.Email, goodPassword, ""); f.Step != "account" {
 		t.Fatalf("sign in: %+v", f)
 	}
-	if code := b.do("GET", "/me", nil, nil); code != 200 {
+	if code := b.do("GET", "/v1/me/", nil, nil); code != 200 {
 		t.Fatalf("/me: %d", code)
 	}
 	_ = e.st.SetPasswordChangeRequired(context.Background(), u.ID, true)
-	if code := b.do("GET", "/me", nil, nil); code != 401 {
+	if code := b.do("GET", "/v1/me/", nil, nil); code != 401 {
 		t.Fatalf("/me after requiring: %d", code)
 	}
 	var f flowOut
@@ -364,7 +370,7 @@ func TestAccessPass(t *testing.T) {
 		t.Fatalf("pass: %d %+v", n, f)
 	}
 	wantActions(t, f, ActionMFA)
-	if code := b.do("GET", "/me", nil, nil); code != 401 {
+	if code := b.do("GET", "/v1/me/", nil, nil); code != 401 {
 		t.Fatalf("/me with only a pass: %d", code)
 	}
 	// One-time: it doesn't work again.
