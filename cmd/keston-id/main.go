@@ -122,7 +122,7 @@ func serve(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, st *stor
 	}
 	// Housekeeping once now (then hourly): deletions due, expired support
 	// accounts, lockout requests that went through.
-	adminapi.New(st, nil, cfg.Issuer).Housekeeping(ctx)
+	adminapi.New(st, cfg.Issuer).Housekeeping(ctx)
 
 	handler, err := server.New(cfg, st, storage, web.Dist())
 	if err != nil {
@@ -151,7 +151,7 @@ func serve(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, st *stor
 					slog.Warn("cleanup", "error", err)
 				}
 				// Organisation lockout requests nobody denied go through.
-				adminapi.New(st, nil, cfg.Issuer).Housekeeping(ctx)
+				adminapi.New(st, cfg.Issuer).Housekeeping(ctx)
 				if err := ensureKey(); err != nil {
 					slog.Warn("signing key rotation", "error", err)
 				}
