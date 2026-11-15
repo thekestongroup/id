@@ -102,7 +102,7 @@ func (a *API) apps(w http.ResponseWriter, r *http.Request) {
 		// When this person allowed it (nil: never signed in to it yet).
 		GrantedAt *time.Time `json:"grantedAt,omitempty"`
 	}
-	all, err := a.store.AllClients(ctx)
+	all, err := a.store.ClientsFor(ctx, cur.user.OrganisationID)
 	if err != nil {
 		serverError(w, r, err)
 		return

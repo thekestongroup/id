@@ -121,6 +121,11 @@ func (c client) IsScopeAllowed(scope string) bool {
 func (c client) public() bool { return c.SecretHash == nil }
 
 func (c client) ApplicationType() op.ApplicationType {
+	// An organisation's single-page or mobile app: https, loopback and
+	// custom-scheme (app) redirect URIs.
+	if c.Native {
+		return op.ApplicationTypeNative
+	}
 	if c.public() {
 		return op.ApplicationTypeUserAgent
 	}

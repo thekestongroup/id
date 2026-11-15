@@ -28,16 +28,26 @@ type Client struct {
 	DevMode                bool     `json:"devMode"`
 	// One of Keston's own apps, which every organisation has.
 	Builtin bool `json:"builtin"`
+	// The organisation that added it in Keston Admin (nil: registered by
+	// Keston). Only its users can sign in to it.
+	OrganisationID *string `json:"organisationId"`
+	// "oidc" or "saml".
+	Protocol string `json:"protocol"`
+	LogoURL  string `json:"logoUrl"`
+	// A single-page or mobile app (PKCE, no secret), added by an organisation.
+	Native bool `json:"native"`
 }
 
 const clientColumns = `id, name, publisher, verification, secret_hash, redirect_uris, post_logout_redirect_uris,
-	required_scopes, optional_scopes, skip_consent, backchannel_logout_uri, privacy_url, terms_url, dev_mode, builtin`
+	required_scopes, optional_scopes, skip_consent, backchannel_logout_uri, privacy_url, terms_url, dev_mode, builtin,
+	organisation_id, protocol, logo_url, native`
 
 func scanClient(row pgx.Row) (*Client, error) {
 	var c Client
 	if err := row.Scan(&c.ID, &c.Name, &c.Publisher, &c.Verification, &c.SecretHash, &c.RedirectURIs,
 		&c.PostLogoutRedirectURIs, &c.RequiredScopes, &c.OptionalScopes, &c.SkipConsent, &c.BackchannelLogoutURI,
-		&c.PrivacyURL, &c.TermsURL, &c.DevMode, &c.Builtin); err != nil {
+		&c.PrivacyURL, &c.TermsURL, &c.DevMode, &c.Builtin, &c.OrganisationID, &c.Protocol, &c.LogoURL,
+		&c.Native); err != nil {
 		return nil, notFound(err)
 	}
 	return &c, nil

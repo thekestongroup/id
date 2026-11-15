@@ -26,6 +26,7 @@ import (
 	"github.com/thekestongroup/id/internal/policy"
 	"github.com/thekestongroup/id/internal/principal"
 	"github.com/thekestongroup/id/internal/profile"
+	"github.com/thekestongroup/id/internal/samlidp"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 	"github.com/thekestongroup/id/kit/apierr"
@@ -40,6 +41,8 @@ type API struct {
 	store *store.Store
 	// Keston ID's address, for profile picture URLs.
 	issuer string
+	// SAML sign-in, for SAML apps' IdP details (own_apps.go).
+	saml *samlidp.IdP
 }
 
 // New: the organisation and admin parts of Keston ID's API (/v1). The
@@ -104,6 +107,7 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermDeleteUsers)).Post("/deleted-users/restore", a.bulkRestore)
 		r.With(a.need(store.PermApps)).Get("/apps", a.listApps)
 		r.With(a.need(store.PermApps)).Put("/apps/{clientID}", a.putAppPolicy)
+		r.With(a.need(store.PermApps)).Route("/own-apps", a.ownAppRoutes)
 		r.With(a.need(store.PermGroups)).Post("/groups", a.createGroup)
 		r.With(a.need(store.PermViewUsers)).Get("/groups/{groupID}", a.getGroup)
 		r.With(a.need(store.PermGroups)).Patch("/groups/{groupID}", a.renameGroup)
