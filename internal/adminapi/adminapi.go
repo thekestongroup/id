@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -104,6 +103,7 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermUserStatus)).Post("/users/bulk/disable", a.bulkDisable)
 		r.With(a.need(store.PermUserStatus)).Post("/users/bulk/enable", a.bulkEnable)
 		r.With(a.need(store.PermViewUsers)).Post("/users/bulk/groups", a.bulkGroups)
+		r.With(a.need(store.PermCreateUsers)).Post("/users/bulk/create", a.bulkCreate)
 		r.With(a.need(store.PermViewUsers)).Post("/users/bulk/add-to-group", a.bulkAddToGroup)
 		r.With(a.need(store.PermViewUsers)).Post("/users/bulk/remove-from-group", a.bulkRemoveFromGroup)
 		r.With(a.need(store.PermDeleteUsers)).Post("/users/bulk/delete", a.bulkDelete)
@@ -510,22 +510,8 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if len(body.Licences) > 0 && !can(r, store.PermLicences) {
-		writeFieldError(w, "licences", "You can't assign licences.")
+	if !a.checkProducts(w, r, body.Licences) {
 		return
-	}
-	if len(body.Licences) > 0 {
-		known, err := a.store.ProductIDs(r.Context())
-		if err != nil {
-			serverError(w, r, err)
-			return
-		}
-		for _, p := range body.Licences {
-			if !slices.Contains(known, p) {
-				writeFieldError(w, "licences", "Choose from Keston’s products")
-				return
-			}
-		}
 	}
 	name := strings.TrimSpace(body.Name)
 	user := normaliseUsername(body.Username)

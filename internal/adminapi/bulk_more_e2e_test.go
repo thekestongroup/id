@@ -4,6 +4,7 @@ package adminapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -109,5 +110,69 @@ func TestBulkGroups(t *testing.T) {
 	if code, _ := e.do(helper, http.MethodPost, "/users/bulk/groups", map[string]any{"userIds": ids(a),
 		"add": []string{admins.ID}}); code != http.StatusForbidden {
 		t.Errorf("group with more permissions: %d", code)
+	}
+}
+
+// Adding a list of users: each gets their own password and the licences;
+// rows that can't be added are skipped and the rest still are.
+func TestBulkCreate(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	if _, err := e.st.DB.Exec(ctx, `INSERT INTO clients (id, name, publisher, redirect_uris, builtin)
+		VALUES ('work', 'Keston Work', 'The Keston Group', '{}', true) ON CONFLICT (id) DO UPDATE SET builtin = true`); err != nil {
+		t.Fatal(err)
+	}
+	admin := e.admin()
+	e.user("taken", "member")
+	code, raw := e.do(admin, http.MethodPost, "/users/bulk/create", map[string]any{
+		"licences": []string{"work"},
+		"users": []map[string]string{
+			{"name": "Amy Adams", "username": "amy.adams"},
+			{"name": "Ben Brown", "username": "Ben.Brown"},
+			{"name": "", "username": "noname"},
+			{"name": "Taken", "username": "taken"},
+			{"name": "Amy Again", "username": "amy.adams"},
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("create: %d %s", code, raw)
+	}
+	var out struct{ Results []bulkResult }
+	_ = json.Unmarshal(raw, &out)
+	want := []string{"done", "done", "skipped", "skipped", "skipped"}
+	for i, r := range out.Results {
+		if r.Result != want[i] {
+			t.Errorf("row %d: %+v, want %s", i, r, want[i])
+		}
+	}
+	amy := out.Results[0]
+	if amy.Password == "" || amy.Password == out.Results[1].Password || amy.Email != "amy.adams@"+e.org.Domain {
+		t.Errorf("Amy: %+v", amy)
+	}
+	u, err := e.st.UserByID(ctx, amy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := secret.CheckPassword(u.PasswordHash, amy.Password); !ok {
+		t.Error("Amy's password doesn't work")
+	}
+	if st, _ := e.st.SignInState(ctx, u); !st.PasswordChangeRequired {
+		t.Error("Amy should change her password at first sign-in")
+	}
+	if l, _ := e.st.Licences(ctx, u.ID); len(l) != 1 || l[0] != "work" {
+		t.Errorf("Amy's licences: %v", l)
+	}
+	if u.Role != "member" {
+		t.Errorf("Amy's role: %s", u.Role)
+	}
+
+	// Licences need "Assign licences".
+	helper := e.user("helper", "member")
+	g := e.group("Helpdesk", "users.create")
+	_ = e.st.AddGroupMember(ctx, g.ID, helper.ID)
+	if code, _ := e.do(helper, http.MethodPost, "/users/bulk/create", map[string]any{
+		"licences": []string{"work"}, "users": []map[string]string{{"name": "Cat", "username": "cat"}},
+	}); code != http.StatusUnprocessableEntity {
+		t.Errorf("licences without the permission: %d", code)
 	}
 }

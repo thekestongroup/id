@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/thekestongroup/id/internal/store"
@@ -48,11 +49,7 @@ func (a *API) putLicences(w http.ResponseWriter, r *http.Request) {
 
 // setLicences sets them and records it, or writes the error.
 func (a *API) setLicences(w http.ResponseWriter, r *http.Request, u *store.User, products []string) bool {
-	if products == nil {
-		products = []string{}
-	}
-	me := caller(r).ID
-	added, removed, err := a.store.SetLicences(r.Context(), u.ID, &me, products)
+	err := a.applyLicences(r, u, products)
 	if errors.Is(err, store.ErrNotFound) {
 		writeFieldError(w, "products", "Choose from Keston’s products")
 		return false
@@ -61,9 +58,46 @@ func (a *API) setLicences(w http.ResponseWriter, r *http.Request, u *store.User,
 		serverError(w, r, err)
 		return false
 	}
+	return true
+}
+
+// applyLicences sets someone's licences and records the change.
+func (a *API) applyLicences(r *http.Request, u *store.User, products []string) error {
+	if products == nil {
+		products = []string{}
+	}
+	me := caller(r).ID
+	added, removed, err := a.store.SetLicences(r.Context(), u.ID, &me, products)
+	if err != nil {
+		return err
+	}
 	if len(added)+len(removed) > 0 {
 		slog.Info("licences changed", "user", u.ID, "added", added, "removed", removed, "by", me)
 		a.audit(r, store.ActionUserLicences, aboutUser(u), a.licenceSummary(r.Context(), added, removed))
+	}
+	return nil
+}
+
+// checkProducts: whether these are all Keston products (writing the error
+// if not, or if the caller can't assign licences).
+func (a *API) checkProducts(w http.ResponseWriter, r *http.Request, products []string) bool {
+	if len(products) == 0 {
+		return true
+	}
+	if !can(r, store.PermLicences) {
+		writeFieldError(w, "licences", "You can't assign licences.")
+		return false
+	}
+	known, err := a.store.ProductIDs(r.Context())
+	if err != nil {
+		serverError(w, r, err)
+		return false
+	}
+	for _, p := range products {
+		if !slices.Contains(known, p) {
+			writeFieldError(w, "licences", "Choose from Keston’s products")
+			return false
+		}
 	}
 	return true
 }
