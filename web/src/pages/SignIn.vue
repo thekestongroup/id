@@ -77,6 +77,9 @@ async function signIn() {
               Sign in
             </Button>
           </form>
+          <p class="text-center text-sm">
+            <Link :as="RouterLink" :to="{ path: '/access-pass', query: $route.query }">Sign in with an access pass</Link>
+          </p>
         </div>
         <template #footer>
           <p class="text-center text-xs text-black/65">

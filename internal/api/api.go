@@ -42,6 +42,10 @@ func (a *API) Routes() http.Handler {
 	r.Get("/flow", a.flow)
 	r.Post("/sign-in", a.signIn)
 	r.Post("/mfa", a.mfa)
+	r.Post("/sign-in/access-pass", a.signInWithPass)
+	r.Post("/required/password", a.requiredPassword)
+	r.Post("/required/mfa/setup", a.requiredMFASetup)
+	r.Post("/required/mfa/enable", a.requiredMFAEnable)
 	r.Post("/consent", a.consent)
 	r.Post("/sign-out", a.signOut)
 	r.Get("/accounts", a.accounts)
@@ -75,7 +79,12 @@ func (a *API) MeRoutes() http.Handler {
 // principal.Middleware (Keston ID's own pages calling /v1).
 func (a *API) CookieSession(r *http.Request) (*store.Session, *store.User, string) {
 	cur := a.current(r)
-	if cur == nil || cur.session.Stage != "verified" {
+	if cur == nil {
+		return nil, nil, ""
+	}
+	// An admin may have required something since (required.go): then it's
+	// not fully signed in any more.
+	if _, err := a.settle(r.Context(), cur); err != nil || cur.session.Stage != store.StageVerified {
 		return nil, nil, ""
 	}
 	return cur.session, cur.user, cur.token

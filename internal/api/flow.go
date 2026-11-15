@@ -15,7 +15,7 @@ import (
 
 // flowResponse tells the web UI which page comes next.
 //
-//	step: "sign-in" | "choose" | "mfa" | "consent" | "redirect" | "account"
+//	step: "sign-in" | "choose" | "mfa" | "actions" | "consent" | "redirect" | "account"
 type flowResponse struct {
 	Step     string      `json:"step"`
 	Redirect string      `json:"redirect,omitempty"`
@@ -25,6 +25,8 @@ type flowResponse struct {
 		Optional []ScopeInfo `json:"optional"`
 	} `json:"scopes,omitempty"`
 	User *userView `json:"user,omitempty"`
+	// step "actions": what they must do first, in order ("password", "mfa").
+	Actions []string `json:"actions,omitempty"`
 }
 
 // next works out where someone goes from here: the heart of the sign-in flow.
@@ -33,17 +35,25 @@ type flowResponse struct {
 func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowResponse, int, string) {
 	ctx := r.Context()
 	res := &flowResponse{}
+	var actions []string
 	if cur != nil {
 		u := a.viewUser(cur.user)
 		res.User = &u
+		// Required actions (required.go): up to date before anything else.
+		var err error
+		if actions, err = a.settle(ctx, cur); err != nil {
+			return nil, http.StatusInternalServerError, "Something went wrong. Try again."
+		}
 	}
 
 	if authRequestID == "" {
 		switch {
 		case cur == nil:
 			res.Step = "sign-in"
-		case cur.session.Stage == "password":
+		case cur.session.Stage == store.StagePassword:
 			res.Step = "mfa"
+		case len(actions) > 0:
+			res.Step, res.Actions = "actions", actions
 		default:
 			res.Step = "account"
 		}
@@ -89,8 +99,17 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		res.Step = "choose"
 		return res, 0, ""
 	}
-	if cur.session.Stage == "password" {
+	if cur.session.Stage == store.StagePassword {
 		res.Step = "mfa"
+		return res, 0, ""
+	}
+	// Before consent and the app: a new password, MFA set up…
+	if len(actions) > 0 {
+		if promptNone {
+			res.Step, res.Redirect = "redirect", a.denyURL(ar.ID, "interaction_required")
+			return res, 0, ""
+		}
+		res.Step, res.Actions = "actions", actions
 		return res, 0, ""
 	}
 	// Turned off for them by their organisation (Keston Admin → Apps).
@@ -233,18 +252,17 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 	a.logSignIn(r, store.SignIn{User: user, Method: store.SignInPassword, AuthRequestID: body.AuthRequestID,
 		Success: true})
 
-	stage := "verified"
+	// Without MFA: straight to required actions, if any (next() settles
+	// the stage, and runs signedInFully once there are none).
+	stage := store.StageActions
 	if user.TOTPEnabled {
-		stage = "password"
+		stage = store.StagePassword
 	}
 	token, sess, err := a.store.CreateSession(ctx, user.ID, stage, []string{"pwd"}, r.UserAgent(), clientIP(r),
 		a.cfg.SessionTTL)
 	if err != nil {
 		serverError(w, r, err)
 		return
-	}
-	if stage == "verified" {
-		a.signedInFully(ctx, user)
 	}
 	// Added to this browser's signed-in accounts, as the active one.
 	a.addSession(w, r, token, user.ID)
@@ -319,7 +337,6 @@ func (a *API) mfa(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cur.session = sess
-	a.signedInFully(ctx, cur.user)
 	a.respondNext(w, r, cur, body.AuthRequestID)
 }
 

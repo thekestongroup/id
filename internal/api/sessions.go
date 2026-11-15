@@ -122,7 +122,7 @@ func (a *API) accounts(w http.ResponseWriter, r *http.Request) {
 	for i, c := range a.signedIn(r) {
 		out = append(out, accountView{ID: c.session.ID, Name: c.user.Name, Email: c.user.Email,
 			Organisation: c.user.Organisation, Active: i == 0,
-			Avatar: profile.PictureURL(a.cfg.Issuer, c.user.ID, c.user.PictureUpdatedAt), NeedsMFA: c.session.Stage != "verified"})
+			Avatar: profile.PictureURL(a.cfg.Issuer, c.user.ID, c.user.PictureUpdatedAt), NeedsMFA: c.session.Stage == store.StagePassword})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
