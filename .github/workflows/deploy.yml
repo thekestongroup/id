@@ -1,9 +1,10 @@
 name: Deploy
 
-# Checks every pull request (no Azure access). On a push to main, or a manual
-# run on main, it checks, builds the image and pushes it to ACR, then deploys
-# it to Azure Container Apps in the `production` environment. That environment
-# should have required reviewers, so every deploy waits for an Approve click.
+# Manual only: Actions -> Deploy -> Run workflow, with branch `main` selected.
+# The first job fails unless the person running it is itsbenioo and the ref is
+# main. It then checks, builds the image, pushes it to ACR (tagged with the
+# commit SHA and latest) and deploys it to Azure Container Apps. The job
+# summary shows the live revision, image and URL.
 #
 # Needs these under Settings -> Secrets and variables -> Actions -> Variables
 # (none are secret; sign-in uses OIDC, so there is no stored key):
@@ -22,29 +23,37 @@ name: Deploy
 # and start Container Apps and Jobs on the resource group.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
-# Everything gets read-only access to the repo by default; only the publish
-# and deploy jobs add id-token: write.
 permissions:
   contents: read
 
-# One deploy at a time; a newer push waits rather than cancelling a deploy
-# that is already running. Pull request runs are grouped per PR and cancelled
-# when superseded.
+# One deploy at a time; a second run waits rather than cancelling one in flight.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('id-pr-{0}', github.event.pull_request.number) || 'deploy-id' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: deploy-id
+  cancel-in-progress: false
 
 env:
   IMAGE: id
 
 jobs:
+  guard:
+    name: Owner only
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only itsbenioo may deploy, and only from main
+        env:
+          ACTOR: ${{ github.actor }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$ACTOR" != "itsbenioo" ] || [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::Deploy is limited to itsbenioo on refs/heads/main (actor: $ACTOR, ref: $REF)"
+            exit 1
+          fi
+
   check:
     name: Checks
+    needs: guard
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,22 +87,9 @@ jobs:
         working-directory: .
         run: go test ./...
 
-  image:
-    name: Image builds
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # Nothing is pushed and there is no Azure sign-in. The Dockerfile's
-      # default (last) stage is the production one.
-      - name: Build (no push)
-        run: docker build --tag "$IMAGE:pr" .
-
   publish:
     name: Push image to ACR
     needs: check
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -121,7 +117,6 @@ jobs:
     name: Deploy to Azure
     needs: publish
     runs-on: ubuntu-latest
-    # The approval gate: configure required reviewers on this environment.
     environment: production
     permissions:
       contents: read
@@ -169,6 +164,7 @@ jobs:
           {
             echo "### Deployed"
             echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Image: \`$IMAGE_REF\`"
             echo "- Revision: \`$REVISION\`"
             echo "- URL: https://$FQDN"
           } >> "$GITHUB_STEP_SUMMARY"
