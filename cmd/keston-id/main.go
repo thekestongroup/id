@@ -6,6 +6,7 @@
 //	keston-id orgs create           create an organisation and its first global admin
 //	keston-id users create          create an account in an existing organisation (by email domain)
 //	keston-id users platform-admin  make an account a platform admin (or -off)
+//	keston-id users role            change an account's role (member or global_admin)
 //	keston-id users unlock          unlock an account locked by failed sign-ins
 //	keston-id users reset-password  set a new password (also unlocks, and signs them out everywhere)
 //
@@ -106,6 +107,8 @@ func run(args []string) error {
 			return createUser(ctx, st, args[1:])
 		case len(args) > 0 && args[0] == "platform-admin":
 			return platformAdmin(ctx, st, args[1:])
+		case len(args) > 0 && args[0] == "role":
+			return setUserRole(ctx, st, args[1:])
 		case len(args) > 0 && args[0] == "unlock":
 			return unlockUser(ctx, st, args[1:])
 		case len(args) > 0 && args[0] == "reset-password":
@@ -113,6 +116,7 @@ func run(args []string) error {
 		}
 		return errors.New("usage: keston-id users create -email … -name … [-role global_admin] [-platform-admin]\n" +
 			"       keston-id users platform-admin -email … [-off]\n" +
+			"       keston-id users role -email … -role member|global_admin\n" +
 			"       keston-id users unlock -email …\n" +
 			"       keston-id users reset-password -email …")
 	default:
@@ -329,6 +333,31 @@ func platformAdmin(ctx context.Context, st *store.Store, args []string) error {
 		return fmt.Errorf("%s: %w", *email, err)
 	}
 	slog.Info("platform admin updated", "email", *email, "platformAdmin", !*off)
+	return nil
+}
+
+// setUserRole changes an existing account's role.
+func setUserRole(ctx context.Context, st *store.Store, args []string) error {
+	fs := flag.NewFlagSet("users role", flag.ContinueOnError)
+	email := fs.String("email", "", "the account")
+	role := fs.String("role", "", "member or global_admin")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *email == "" {
+		return errors.New("-email is required")
+	}
+	if *role != "member" && *role != "global_admin" {
+		return errors.New("-role must be member or global_admin")
+	}
+	u, err := st.UserByEmail(ctx, strings.ToLower(*email))
+	if err != nil {
+		return fmt.Errorf("no account with email %s: %w", *email, err)
+	}
+	if err := st.SetRole(ctx, u.ID, *role); err != nil {
+		return err
+	}
+	slog.Info("role updated", "email", u.Email, "role", *role)
 	return nil
 }
 
