@@ -1,0 +1,174 @@
+name: Deploy
+
+# Checks every pull request (no Azure access). On a push to main, or a manual
+# run on main, it checks, builds the image and pushes it to ACR, then deploys
+# it to Azure Container Apps in the `production` environment. That environment
+# should have required reviewers, so every deploy waits for an Approve click.
+#
+# Needs these under Settings -> Secrets and variables -> Actions -> Variables
+# (none are secret; sign-in uses OIDC, so there is no stored key):
+#
+#   AZURE_CLIENT_ID        identity with federated credentials for this repo:
+#                          one for branch main (image push) and one for the
+#                          `production` environment (deploy)
+#   AZURE_TENANT_ID
+#   AZURE_SUBSCRIPTION_ID
+#   AZURE_RESOURCE_GROUP
+#   ACR_NAME               registry name, without .azurecr.io
+#   ID_APP_NAME            the Keston ID Container App
+#   ID_SETUP_JOB_NAME      the Container Apps Job that runs `clients sync`
+#
+# The identity needs AcrPush on the registry and a role that can update
+# and start Container Apps and Jobs on the resource group.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Everything gets read-only access to the repo by default; only the publish
+# and deploy jobs add id-token: write.
+permissions:
+  contents: read
+
+# One deploy at a time; a newer push waits rather than cancelling a deploy
+# that is already running. Pull request runs are grouped per PR and cancelled
+# when superseded.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('id-pr-{0}', github.event.pull_request.number) || 'deploy-id' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: id
+
+jobs:
+  check:
+    name: Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install web dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web
+        working-directory: web
+        run: pnpm build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # The Go packages embed web/dist, so this runs after the web build.
+      - name: Go vet
+        working-directory: .
+        run: go vet ./...
+
+      - name: Go test
+        working-directory: .
+        run: go test ./...
+
+  image:
+    name: Image builds
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Nothing is pushed and there is no Azure sign-in. The Dockerfile's
+      # default (last) stage is the production one.
+      - name: Build (no push)
+        run: docker build --tag "$IMAGE:pr" .
+
+  publish:
+    name: Push image to ACR
+    needs: check
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push to ACR
+        env:
+          ACR: ${{ vars.ACR_NAME }}
+        run: |
+          az acr login --name "$ACR"
+          REF="$ACR.azurecr.io/$IMAGE"
+          docker build --tag "$REF:${{ github.sha }}" --tag "$REF:latest" .
+          docker push --all-tags "$REF"
+
+  deploy:
+    name: Deploy to Azure
+    needs: publish
+    runs-on: ubuntu-latest
+    # The approval gate: configure required reviewers on this environment.
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run migrations and sync apps
+        env:
+          RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+          JOB: ${{ vars.ID_SETUP_JOB_NAME }}
+          IMAGE_REF: ${{ vars.ACR_NAME }}.azurecr.io/${{ env.IMAGE }}:${{ github.sha }}
+        run: |
+          az containerapp job update --name "$JOB" --resource-group "$RG" --image "$IMAGE_REF" --output none
+          EXEC=$(az containerapp job start --name "$JOB" --resource-group "$RG" --query name --output tsv)
+          echo "Started $EXEC"
+          # Wait up to 5 minutes; a failed setup stops the deploy.
+          for _ in $(seq 1 60); do
+            STATUS=$(az containerapp job execution show --name "$JOB" --resource-group "$RG" --job-execution-name "$EXEC" --query properties.status --output tsv)
+            echo "Setup: $STATUS"
+            case "$STATUS" in
+              Succeeded) exit 0 ;;
+              Failed|Stopped|Degraded) echo "::error::Setup job $STATUS"; exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo "::error::Setup job did not finish in 5 minutes"
+          exit 1
+
+      - name: Update Keston ID
+        env:
+          RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+          APP: ${{ vars.ID_APP_NAME }}
+          IMAGE_REF: ${{ vars.ACR_NAME }}.azurecr.io/${{ env.IMAGE }}:${{ github.sha }}
+        run: |
+          az containerapp update --name "$APP" --resource-group "$RG" --image "$IMAGE_REF" --output none
+          FQDN=$(az containerapp show --name "$APP" --resource-group "$RG" --query properties.configuration.ingress.fqdn --output tsv)
+          REVISION=$(az containerapp show --name "$APP" --resource-group "$RG" --query properties.latestReadyRevisionName --output tsv)
+          echo "Deployed ${{ github.sha }} as revision $REVISION to https://$FQDN"
+          {
+            echo "### Deployed"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Revision: \`$REVISION\`"
+            echo "- URL: https://$FQDN"
+          } >> "$GITHUB_STEP_SUMMARY"
