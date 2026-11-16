@@ -242,3 +242,9 @@ encrypted like the OIDC keys.
 
 End-to-end tests (`go test -tags e2e ./internal/server/`) need a throwaway
 Postgres; see the top of `internal/server/sso_apps_e2e_test.go`.
+
+## Licence
+
+Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE): free to use, modify and share for any noncommercial purpose. Required notice: Copyright The Keston Group (https://github.com/thekestongroup).
+
+Please report security issues privately; see [SECURITY.md](SECURITY.md).
