@@ -28,6 +28,10 @@ type Config struct {
 	RefreshTokenTTL time.Duration
 	SessionTTL      time.Duration
 	AuthRequestTTL  time.Duration
+	// Other sites allowed to call the API (/v1) from a browser with an access
+	// token, e.g. https://admin.example.com. Exact origins, comma separated.
+	// Empty: none (the web UI and same-origin proxies don't need any).
+	APIOrigins []string
 	// Dev only: proxy the web UI to the Vite dev server instead of serving
 	// the embedded build, e.g. http://localhost:5180.
 	DevWebURL string
@@ -54,6 +58,11 @@ func Load() (*Config, error) {
 		AuthRequestTTL:  30 * time.Minute,
 	}
 	c.Insecure = strings.HasPrefix(c.Issuer, "http://")
+	for _, o := range strings.Split(os.Getenv("KESTON_ID_API_ORIGINS"), ",") {
+		if o = strings.TrimRight(strings.TrimSpace(o), "/"); o != "" {
+			c.APIOrigins = append(c.APIOrigins, o)
+		}
+	}
 
 	for name, target := range map[string]*time.Duration{
 		"KESTON_ID_ACCESS_TOKEN_TTL":  &c.AccessTokenTTL,
