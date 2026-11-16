@@ -1,0 +1,68 @@
+name: CI
+
+# Runs on every pull request and on pushes to main. Read-only, with no Azure
+# access: it checks the code and confirms the image builds, but pushes nothing.
+# `Checks` and `Image builds` are the status checks to require on main.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Runs are grouped per PR or branch; a newer push cancels the older run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: id
+
+jobs:
+  check:
+    name: Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install web dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web
+        working-directory: web
+        run: pnpm build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # The Go packages embed web/dist, so this runs after the web build.
+      - name: Go vet
+        working-directory: .
+        run: go vet ./...
+
+      - name: Go test
+        working-directory: .
+        run: go test ./...
+
+  image:
+    name: Image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Nothing is pushed and there is no Azure sign-in. The Dockerfile's
+      # default (last) stage is the production one.
+      - name: Build (no push)
+        run: docker build --tag "$IMAGE:pr" .
