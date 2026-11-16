@@ -6,6 +6,8 @@
 //	keston-id orgs create           create an organisation and its first global admin
 //	keston-id users create          create an account in an existing organisation (by email domain)
 //	keston-id users platform-admin  make an account a platform admin (or -off)
+//	keston-id users unlock          unlock an account locked by failed sign-ins
+//	keston-id users reset-password  set a new password (also unlocks, and signs them out everywhere)
 //
 // Passwords come from KESTON_ID_PASSWORD, or are read from stdin.
 //
@@ -104,9 +106,15 @@ func run(args []string) error {
 			return createUser(ctx, st, args[1:])
 		case len(args) > 0 && args[0] == "platform-admin":
 			return platformAdmin(ctx, st, args[1:])
+		case len(args) > 0 && args[0] == "unlock":
+			return unlockUser(ctx, st, args[1:])
+		case len(args) > 0 && args[0] == "reset-password":
+			return resetPassword(ctx, st, args[1:])
 		}
 		return errors.New("usage: keston-id users create -email … -name … [-role global_admin] [-platform-admin]\n" +
-			"       keston-id users platform-admin -email … [-off]")
+			"       keston-id users platform-admin -email … [-off]\n" +
+			"       keston-id users unlock -email …\n" +
+			"       keston-id users reset-password -email …")
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
@@ -321,6 +329,57 @@ func platformAdmin(ctx context.Context, st *store.Store, args []string) error {
 		return fmt.Errorf("%s: %w", *email, err)
 	}
 	slog.Info("platform admin updated", "email", *email, "platformAdmin", !*off)
+	return nil
+}
+
+// unlockUser clears the lock that five wrong passwords put on an account, for
+// when someone can't wait the 15 minutes.
+func unlockUser(ctx context.Context, st *store.Store, args []string) error {
+	fs := flag.NewFlagSet("users unlock", flag.ContinueOnError)
+	email := fs.String("email", "", "the account")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	u, err := st.UserByEmail(ctx, *email)
+	if err != nil {
+		return fmt.Errorf("%s: %w", *email, err)
+	}
+	if err := st.Unlock(ctx, u.ID); err != nil {
+		return err
+	}
+	slog.Info("user unlocked", "id", u.ID, "email", u.Email)
+	return nil
+}
+
+// resetPassword sets a new password (KESTON_ID_PASSWORD, or from stdin) under
+// the organisation's password rules, unlocks the account and signs it out
+// everywhere: the same as an admin resetting it in Keston Admin.
+func resetPassword(ctx context.Context, st *store.Store, args []string) error {
+	fs := flag.NewFlagSet("users reset-password", flag.ContinueOnError)
+	email := fs.String("email", "", "the account")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	u, err := st.UserByEmail(ctx, *email)
+	if err != nil {
+		return fmt.Errorf("%s: %w", *email, err)
+	}
+	org, err := st.OrganisationByID(ctx, u.OrganisationID)
+	if err != nil {
+		return err
+	}
+	password, err := readPassword()
+	if err != nil {
+		return err
+	}
+	username, _, _ := strings.Cut(strings.ToLower(u.Email), "@")
+	if failed := org.PasswordPolicy.Check(password, username); len(failed) > 0 {
+		return errors.New(policy.Message(failed))
+	}
+	if err := st.ResetPassword(ctx, u.ID, secret.HashPassword(password)); err != nil {
+		return err
+	}
+	slog.Info("password reset", "id", u.ID, "email", u.Email)
 	return nil
 }
 

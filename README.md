@@ -89,6 +89,24 @@ or go to http://id.keston.localhost/account.
 The local Keston Work client secret is `keston-work-local-secret` (set
 `KESTON_WORK_LOCAL_CLIENT_SECRET` to change it).
 
+### Locked out, or lost your password
+
+Five wrong passwords lock an account for 15 minutes. If someone can't wait, or
+needs a new password and no admin can reset it in Keston Admin:
+
+```bash
+docker compose run --rm keston-id users unlock -email you@keston.school
+```
+
+```bash
+docker compose run --rm -it keston-id users reset-password -email you@keston.school
+```
+
+`reset-password` reads the new password from `KESTON_ID_PASSWORD` or asks for it,
+checks it against the organisation's password rules, unlocks the account and
+signs it out everywhere, as an admin's reset in Keston Admin does. On Cloud
+Run, run the same arguments as a job, with the password from a secret.
+
 ### Local test account
 
 For local testing only (never create it on the live server):
