@@ -5,10 +5,10 @@
     "publisher": "The Keston Group",
     "verification": "owned",
     "redirectUris": [
-      "https://ADMIN_URL/callback"
+      "https://keston-admin-440385569961.europe-west2.run.app/callback"
     ],
     "postLogoutRedirectUris": [
-      "https://ADMIN_URL/"
+      "https://keston-admin-440385569961.europe-west2.run.app/"
     ],
     "requiredScopes": [
       "openid",
@@ -19,80 +19,5 @@
     "skipConsent": true,
     "privacyUrl": "",
     "termsUrl": ""
-  },
-  {
-    "id": "learn",
-    "name": "Keston Learn",
-    "publisher": "The Keston Group",
-    "verification": "owned",
-    "secretEnv": "KESTON_LEARN_CLIENT_SECRET",
-    "redirectUris": [
-      "https://LEARN_URL/callback"
-    ],
-    "postLogoutRedirectUris": [
-      "https://LEARN_URL/"
-    ],
-    "requiredScopes": [
-      "openid",
-      "profile",
-      "email"
-    ],
-    "optionalScopes": [
-      "courses:read",
-      "offline_access"
-    ],
-    "privacyUrl": "https://LEARN_URL/privacy",
-    "termsUrl": "https://LEARN_URL/terms",
-    "builtin": true
-  },
-  {
-    "id": "schools",
-    "name": "Keston Schools",
-    "publisher": "The Keston Group",
-    "verification": "owned",
-    "secretEnv": "KESTON_SCHOOLS_CLIENT_SECRET",
-    "redirectUris": [
-      "https://SCHOOLS_URL/callback"
-    ],
-    "postLogoutRedirectUris": [
-      "https://SCHOOLS_URL/"
-    ],
-    "requiredScopes": [
-      "openid",
-      "profile",
-      "email"
-    ],
-    "optionalScopes": [
-      "students:read",
-      "offline_access"
-    ],
-    "privacyUrl": "https://SCHOOLS_URL/privacy",
-    "termsUrl": "https://SCHOOLS_URL/terms",
-    "builtin": true
-  },
-  {
-    "id": "work",
-    "name": "Keston Work",
-    "publisher": "The Keston Group",
-    "verification": "owned",
-    "secretEnv": "KESTON_WORK_CLIENT_SECRET",
-    "redirectUris": [
-      "https://WORK_URL/callback"
-    ],
-    "postLogoutRedirectUris": [
-      "https://WORK_URL/"
-    ],
-    "requiredScopes": [
-      "openid",
-      "profile",
-      "email",
-      "staff:read"
-    ],
-    "optionalScopes": [
-      "offline_access"
-    ],
-    "privacyUrl": "https://WORK_URL/privacy",
-    "termsUrl": "https://WORK_URL/terms",
-    "builtin": true
   }
 ]
