@@ -278,6 +278,14 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	// Right password, but their organisation isn't verified yet: say so
+	// (only to someone who proved who they are).
+	if ok && user.Status == "active" && !user.OrganisationVerified {
+		a.logSignIn(r, store.SignIn{User: user, Method: store.SignInPassword, AuthRequestID: body.AuthRequestID,
+			Reason: store.ReasonUnverifiedOrg})
+		writeUnverified(w)
+		return
+	}
 	if !ok || !user.Usable() {
 		_ = a.store.RecordLogin(ctx, user.ID, false)
 		why := store.ReasonWrongPassword

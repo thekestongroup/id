@@ -55,6 +55,9 @@ type User struct {
 	FailedLogins      int
 	LockedUntil       *time.Time
 	CreatedAt         time.Time
+	// Their organisation is verified (see Organisation.Verified); until then
+	// they can't sign in to anything.
+	OrganisationVerified bool
 }
 
 // The organisation's name comes from a subquery, so the same columns work
@@ -65,13 +68,14 @@ const userColumns = `id, email, name, organisation_id,
 		AND (platform_admin OR role = 'global_admin')) AS is_platform_admin,
 	support_for, expires_at, picture_updated_at,
 	password_hash, password_changed_at, totp_secret, totp_enabled, backup_codes, status, failed_logins, locked_until,
-	created_at`
+	created_at,
+	(SELECT o.verified_at IS NOT NULL FROM organisations o WHERE o.id = users.organisation_id) AS organisation_verified`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.OrganisationID, &u.Organisation, &u.Role, &u.PlatformAdmin,
 		&u.SupportFor, &u.ExpiresAt, &u.PictureUpdatedAt, &u.PasswordHash, &u.PasswordChangedAt, &u.TOTPSecret, &u.TOTPEnabled, &u.BackupCodes, &u.Status, &u.FailedLogins,
-		&u.LockedUntil, &u.CreatedAt)
+		&u.LockedUntil, &u.CreatedAt, &u.OrganisationVerified)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -367,9 +371,10 @@ func (s *Store) SetRole(ctx context.Context, userID, role string) error {
 	return err
 }
 
-// Usable: active, and (for a support account) not expired.
+// Usable: active, in a verified organisation, and (for a support account)
+// not expired.
 func (u *User) Usable() bool {
-	return u.Status == "active" && (u.ExpiresAt == nil || u.ExpiresAt.After(time.Now()))
+	return u.Status == "active" && u.OrganisationVerified && (u.ExpiresAt == nil || u.ExpiresAt.After(time.Now()))
 }
 
 // IsSupport: a temporary Keston support account.

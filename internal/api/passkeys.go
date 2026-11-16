@@ -221,6 +221,12 @@ func (a *API) passkeySignIn(w http.ResponseWriter, r *http.Request) {
 			"Too many attempts. Wait 15 minutes, or reset your password.")
 		return
 	}
+	if user.Status == "active" && !user.IsSupport() && !user.OrganisationVerified {
+		a.logSignIn(r, store.SignIn{User: user, Method: store.SignInPasskey, AuthRequestID: body.AuthRequestID,
+			Reason: store.ReasonUnverifiedOrg})
+		writeUnverified(w)
+		return
+	}
 	if !user.Usable() || user.IsSupport() {
 		passkeyFailed(w, r, errors.New("account can't sign in"))
 		return

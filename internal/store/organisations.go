@@ -26,18 +26,22 @@ type Organisation struct {
 	// in first.
 	DeletionRequestedAt *time.Time `json:"deletionRequestedAt,omitempty"`
 	DeleteAfter         *time.Time `json:"deleteAfter,omitempty"`
+	// Verified by Keston staff (or created verified). Until then its people
+	// can't sign in. Always set for the platform organisation.
+	Verified   bool       `json:"verified"`
+	VerifiedAt *time.Time `json:"verifiedAt,omitempty"`
 }
 
 const orgColumns = `id, name, domain, password_policy, profile_editing,
 	(SELECT count(*) FROM users u WHERE u.organisation_id = organisations.id AND u.support_for IS NULL
 		AND u.status <> 'deleted'), created_at,
-	is_platform, deletion_requested_at, delete_after, username_format`
+	is_platform, deletion_requested_at, delete_after, username_format, verified_at`
 
 func scanOrganisation(row pgx.Row) (*Organisation, error) {
 	var o Organisation
 	var raw, editing []byte
 	if err := row.Scan(&o.ID, &o.Name, &o.Domain, &raw, &editing, &o.UserCount, &o.CreatedAt, &o.IsPlatform,
-		&o.DeletionRequestedAt, &o.DeleteAfter, &o.UsernameFormat); err != nil {
+		&o.DeletionRequestedAt, &o.DeleteAfter, &o.UsernameFormat, &o.VerifiedAt); err != nil {
 		return nil, notFound(err)
 	}
 	if err := json.Unmarshal(raw, &o.PasswordPolicy); err != nil {
@@ -47,11 +51,12 @@ func scanOrganisation(row pgx.Row) (*Organisation, error) {
 		return nil, err
 	}
 	o.PasswordPolicy = o.PasswordPolicy.Normalise()
+	o.Verified = o.VerifiedAt != nil
 	return &o, nil
 }
 
 func (s *Store) Organisations(ctx context.Context) ([]Organisation, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+orgColumns+` FROM organisations ORDER BY is_platform DESC, name`)
+	rows, err := s.DB.Query(ctx, `SELECT `+orgColumns+` FROM organisations ORDER BY is_platform DESC, verified_at IS NOT NULL, name`)
 	if err != nil {
 		return nil, err
 	}
@@ -80,18 +85,26 @@ func (s *Store) DomainTaken(ctx context.Context, domain string) (bool, error) {
 	return taken, err
 }
 
-// CreateOrganisation makes an organisation and its first global admin
-// together: neither exists without the other.
+// CreateOrganisation makes a verified organisation and its first global
+// admin together: neither exists without the other.
 func (s *Store) CreateOrganisation(ctx context.Context, name, domain string, admin NewUser) (*Organisation, *User,
 	error) {
+	return s.CreateOrganisationWith(ctx, name, domain, admin, true)
+}
+
+// CreateOrganisationWith is CreateOrganisation, verified or not (public
+// sign-up while verification is required: see RequireOrganisationVerification).
+func (s *Store) CreateOrganisationWith(ctx context.Context, name, domain string, admin NewUser, verified bool) (
+	*Organisation, *User, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer tx.Rollback(ctx)
 	var orgID string
-	if err := tx.QueryRow(ctx, `INSERT INTO organisations (name, domain) VALUES ($1, lower($2)) RETURNING id`,
-		name, domain).Scan(&orgID); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO organisations (name, domain, verified_at)
+		VALUES ($1, lower($2), CASE WHEN $3 THEN now() END) RETURNING id`,
+		name, domain, verified).Scan(&orgID); err != nil {
 		return nil, nil, err
 	}
 	admin.OrganisationID = orgID
@@ -164,8 +177,9 @@ func (s *Store) EnsurePlatformOrganisation(ctx context.Context, name, domain str
 	if err == nil {
 		return s.OrganisationByID(ctx, id)
 	}
-	if err := s.DB.QueryRow(ctx, `INSERT INTO organisations (name, domain, is_platform) VALUES ($1, lower($2), TRUE)
-		ON CONFLICT (lower(domain)) DO UPDATE SET is_platform = TRUE RETURNING id`, name, domain).Scan(&id); err != nil {
+	if err := s.DB.QueryRow(ctx, `INSERT INTO organisations (name, domain, is_platform, verified_at) VALUES ($1, lower($2), TRUE, now())
+		ON CONFLICT (lower(domain)) DO UPDATE SET is_platform = TRUE,
+			verified_at = coalesce(organisations.verified_at, now()) RETURNING id`, name, domain).Scan(&id); err != nil {
 		return nil, err
 	}
 	return s.OrganisationByID(ctx, id)
@@ -223,4 +237,27 @@ func (s *Store) SetUsernameFormat(ctx context.Context, orgID, format string) err
 	_, err := s.DB.Exec(ctx, `UPDATE organisations SET username_format = $2, updated_at = now() WHERE id = $1`,
 		orgID, format)
 	return err
+}
+
+// ── Verification ─────────────────────────────────────────────────────────
+
+// RequireOrganisationVerification: whether organisations made through the
+// public sign-up start unverified (platform-wide setting, default off).
+func (s *Store) RequireOrganisationVerification(ctx context.Context) (bool, error) {
+	var on bool
+	err := s.DB.QueryRow(ctx, `SELECT require_organisation_verification FROM platform_settings`).Scan(&on)
+	return on, err
+}
+
+func (s *Store) SetRequireOrganisationVerification(ctx context.Context, on bool) error {
+	_, err := s.DB.Exec(ctx, `UPDATE platform_settings SET require_organisation_verification = $1, updated_at = now()`, on)
+	return err
+}
+
+// VerifyOrganisation marks an organisation verified by a platform admin. It
+// reports whether it changed (false: already verified).
+func (s *Store) VerifyOrganisation(ctx context.Context, orgID, byUserID string) (bool, error) {
+	tag, err := s.DB.Exec(ctx, `UPDATE organisations SET verified_at = now(), verified_by = $2, updated_at = now()
+		WHERE id = $1 AND verified_at IS NULL`, orgID, byUserID)
+	return tag.RowsAffected() == 1, err
 }

@@ -18,5 +18,15 @@ func failReason(u *store.User) string {
 	if u.Status != "active" {
 		return store.ReasonDisabled
 	}
+	if !u.OrganisationVerified {
+		return store.ReasonUnverifiedOrg
+	}
 	return store.ReasonExpired
+}
+
+// writeUnverified: the answer to a sign-in by someone whose organisation is
+// still waiting to be verified by The Keston Group.
+func writeUnverified(w http.ResponseWriter) {
+	writeError(w, http.StatusForbidden, "organisation_unverified",
+		"Your organisation is waiting to be verified. When it's verified, you'll be able to sign in.")
 }

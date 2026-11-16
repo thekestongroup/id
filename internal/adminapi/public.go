@@ -85,9 +85,16 @@ func (a *API) signUp(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "adminPassword", policy.Message(failed))
 		return
 	}
-	org, admin, err := a.store.CreateOrganisation(r.Context(), name, domain, store.NewUser{
+	// Unverified (no one can sign in yet) while Keston staff verify new
+	// organisations: Settings → Require verification for new organisations.
+	require, err := a.store.RequireOrganisationVerification(r.Context())
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	org, admin, err := a.store.CreateOrganisationWith(r.Context(), name, domain, store.NewUser{
 		Email: user + "@" + domain, Name: adminName, PasswordHash: secret.HashPassword(body.AdminPassword),
-	})
+	}, !require)
 	if isUniqueViolation(err) {
 		writeFieldError(w, "domain", domain+" already belongs to another organisation.")
 		return
@@ -100,7 +107,8 @@ func (a *API) signUp(w http.ResponseWriter, r *http.Request) {
 	a.store.Audit(r.Context(), store.AuditEntry{OrganisationID: org.ID, Actor: admin,
 		Action: store.ActionOrganisationCreated, TargetType: store.TargetOrganisation, TargetID: org.ID,
 		TargetName: org.Name, Summary: "Signed up", IP: clientIP(r)})
-	writeJSON(w, http.StatusCreated, map[string]any{"organisation": org, "admin": a.userView(admin)})
+	writeJSON(w, http.StatusCreated, map[string]any{"organisation": org, "admin": a.userView(admin),
+		"awaitingVerification": !org.Verified})
 }
 
 // ── Rate limiting ────────────────────────────────────────────────────────

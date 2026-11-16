@@ -111,9 +111,22 @@ func requestInfo(req op.TokenRequest) (clientID string, amr []string, authTime t
 	return "", nil, time.Time{}, nil
 }
 
+// canIssue: tokens are only issued to (and refreshed for) people who could
+// sign in now: active, and in a verified organisation.
+func (s *Storage) canIssue(ctx context.Context, userID string) error {
+	u, err := s.store.UserByID(ctx, userID)
+	if err != nil || !u.Usable() {
+		return oidc.ErrAccessDenied().WithDescription("this account can't sign in")
+	}
+	return nil
+}
+
 func (s *Storage) CreateAccessToken(ctx context.Context, req op.TokenRequest) (string, time.Time, error) {
 	clientID, _, _, sessionID := requestInfo(req)
 	user := req.GetSubject()
+	if err := s.canIssue(ctx, user); err != nil {
+		return "", time.Time{}, err
+	}
 	return s.store.CreateAccessToken(ctx, s.store.DB, clientID, &user, req.GetAudience(), req.GetScopes(), nil,
 		sessionID, s.cfg.AccessTokenTTL)
 }
@@ -124,6 +137,9 @@ func (s *Storage) CreateAccessToken(ctx context.Context, req op.TokenRequest) (s
 func (s *Storage) CreateAccessAndRefreshTokens(ctx context.Context, req op.TokenRequest,
 	currentRefreshToken string) (string, string, time.Time, error) {
 	clientID, amr, authTime, sessionID := requestInfo(req)
+	if err := s.canIssue(ctx, req.GetSubject()); err != nil {
+		return "", "", time.Time{}, err
+	}
 	tx, err := s.store.DB.Begin(ctx)
 	if err != nil {
 		return "", "", time.Time{}, err
@@ -162,6 +178,9 @@ func (s *Storage) CreateAccessAndRefreshTokens(ctx context.Context, req op.Token
 func (s *Storage) TokenRequestByRefreshToken(ctx context.Context, token string) (op.RefreshTokenRequest, error) {
 	r, err := s.store.RefreshTokenByToken(ctx, token)
 	if err != nil {
+		return nil, op.ErrInvalidRefreshToken
+	}
+	if s.canIssue(ctx, r.UserID) != nil {
 		return nil, op.ErrInvalidRefreshToken
 	}
 	return &refreshRequest{RefreshToken: r, token: token}, nil
@@ -244,7 +263,7 @@ func (s *Storage) setUserinfo(ctx context.Context, info *oidc.UserInfo, userID s
 	if err != nil {
 		return err
 	}
-	if u.Status != "active" {
+	if u.Status != "active" || !u.OrganisationVerified {
 		return errors.New("account disabled")
 	}
 	info.Subject = u.ID
