@@ -99,7 +99,8 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 	})
 
 	// Keston ID's API, /v1: the same endpoints for every app. Keston Admin
-	// reaches it at admin.keston.co/api/… (Caddy, same origin), the account
+	// reaches it directly (KESTON_ID_API_ORIGINS lets its site call it; locally,
+	// at admin.keston.localhost/api/… through Caddy), the account
 	// pages here with the session cookie, other apps with access tokens.
 	// Tokens are checked with kit/auth like every Keston API, against Keston
 	// ID's own keys (no HTTP round trip to itself).
@@ -118,6 +119,8 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 	admin := adminapi.New(st, cfg.Issuer)
 	admin.SetSAML(saml)
 	r.Route("/v1", func(r chi.Router) {
+		// Other sites (Keston Admin) calling directly, with a token: see cors.go.
+		r.Use(apiCORS(cfg.APIOrigins))
 		// Self-service sign-up: no sign-in (rate limited).
 		r.Mount("/public", admin.PublicRoutes())
 		r.Group(func(r chi.Router) {

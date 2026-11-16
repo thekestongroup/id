@@ -318,3 +318,36 @@ func TestAccessPassEndpoints(t *testing.T) {
 		t.Fatalf("disabled user: %d", n)
 	}
 }
+
+// Resetting with generatePassword: Keston ID makes up a password that meets
+// the policy, returns it once, and it is the one stored.
+func TestResetGeneratedPassword(t *testing.T) {
+	e := signinSetup(t)
+	admin := e.user("helpdesk", store.PermCreateUsers, store.PermResetPassword)
+	var created struct{ ID string }
+	if n := e.as(admin, "POST", "/users", map[string]any{"name": "Re Set", "username": "reset1", "password": pw},
+		&created); n != 201 {
+		t.Fatalf("create: %d", n)
+	}
+	var out struct{ Password string }
+	if n := e.as(admin, "POST", "/users/"+created.ID+"/reset-password",
+		map[string]any{"generatePassword": true, "password": "ignored"}, &out); n != 200 {
+		t.Fatalf("reset: %d", n)
+	}
+	if out.Password == "" || out.Password == "ignored" {
+		t.Fatalf("password: got %q", out.Password)
+	}
+	if failed := e.org.PasswordPolicy.Check(out.Password, "reset1"); len(failed) > 0 {
+		t.Errorf("generated password fails the policy: %v", failed)
+	}
+	u, err := e.st.UserByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := secret.CheckPassword(u.PasswordHash, out.Password); !ok {
+		t.Error("the returned password doesn't match the stored one")
+	}
+	if !e.required(u) {
+		t.Error("a reset should still require a change by default")
+	}
+}

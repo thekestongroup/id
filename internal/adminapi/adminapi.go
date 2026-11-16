@@ -626,22 +626,28 @@ func (a *API) target(w http.ResponseWriter, r *http.Request) *store.User {
 	return u
 }
 
-// POST …/reset-password: a new password set by an admin. It unlocks the
-// account and signs it out everywhere.
+// POST …/reset-password {password | generatePassword, requirePasswordChange?}:
+// a new password set by an admin, or one Keston ID makes up (meeting the
+// policy) and returns once. It unlocks the account and signs it out
+// everywhere.
 func (a *API) resetPassword(w http.ResponseWriter, r *http.Request) {
 	u := a.target(w, r)
 	if u == nil {
 		return
 	}
 	var body struct {
-		Password string `json:"password"`
+		Password         string `json:"password"`
+		GeneratePassword bool   `json:"generatePassword"`
 		// They choose their own password at their next sign-in (default on).
 		RequirePasswordChange *bool `json:"requirePasswordChange"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	if failed := organisation(r).PasswordPolicy.Check(body.Password, normaliseUsername(strings.Split(u.Email, "@")[0])); len(failed) > 0 {
+	username := normaliseUsername(strings.Split(u.Email, "@")[0])
+	if body.GeneratePassword {
+		body.Password = organisation(r).PasswordPolicy.Generate(username)
+	} else if failed := organisation(r).PasswordPolicy.Check(body.Password, username); len(failed) > 0 {
 		writeFieldError(w, "password", policy.Message(failed))
 		return
 	}
@@ -656,6 +662,10 @@ func (a *API) resetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("password reset", "user", u.ID, "by", caller(r).ID)
 	a.audit(r, store.ActionUserPasswordReset, aboutUser(u), "")
+	if body.GeneratePassword {
+		writeJSON(w, http.StatusOK, map[string]string{"password": body.Password})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
