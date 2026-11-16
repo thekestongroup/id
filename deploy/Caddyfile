@@ -27,20 +27,14 @@
 	}
 }
 
-# Keston Admin: the web app (the "admin" container, from the admin repo), and
-# its own backend (the "api" container, same repo) on the same origin at /api.
-# That backend is only for Keston Admin: it passes its requests on to Keston ID
-# (and, later, the other Keston apps). Other clients use the regular APIs. Signing in doesn't come through it: Keston Admin goes to
-# Keston ID's own address for that.
+# Keston Admin: one container (the "admin" container, from the admin repo)
+# serving the web app and its own API at /api. That API is only for Keston
+# Admin: it passes its requests on to Keston ID (and, later, the other Keston
+# apps). Other clients use the regular APIs. Signing in doesn't come through
+# it: Keston Admin goes to Keston ID's own address for that.
 {$KESTON_ADMIN_SITE} {
 	encode zstd gzip
-	handle_path /api/* {
-		rewrite * /v1{uri}
-		reverse_proxy keston-api:8080
-	}
-	handle {
-		reverse_proxy admin:8080
-	}
+	reverse_proxy admin:8080
 }
 
 # Keston Work. Until the app exists, a stand-in page where sign-ins land,
