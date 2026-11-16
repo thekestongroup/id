@@ -17,7 +17,7 @@
 		# Every replica, found by Docker's DNS; new ones are picked up.
 		dynamic a {
 			name keston-id
-			port 4444
+			port 8080
 			refresh 5s
 		}
 		lb_policy round_robin

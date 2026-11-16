@@ -26,7 +26,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=go /keston-id /keston-id
 COPY deploy/ /etc/keston-id/
-EXPOSE 4444
+EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 CMD ["/keston-id", "healthcheck"]
 ENTRYPOINT ["/keston-id"]
 CMD ["serve"]

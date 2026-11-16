@@ -45,8 +45,8 @@ type Config struct {
 
 func Load() (*Config, error) {
 	c := &Config{
-		Issuer:          strings.TrimRight(env("KESTON_ID_ISSUER", "http://id.keston.localhost:4444"), "/"),
-		Addr:            env("KESTON_ID_ADDR", ":4444"),
+		Issuer:          strings.TrimRight(env("KESTON_ID_ISSUER", "http://id.keston.localhost:8080"), "/"),
+		Addr:            env("KESTON_ID_ADDR", ":8080"),
 		DatabaseURL:     env("KESTON_ID_DATABASE_URL", "postgres://keston:keston@localhost:5432/keston_id?sslmode=disable"),
 		DevWebURL:       os.Getenv("KESTON_ID_DEV_WEB_URL"),
 		PlatformName:    env("KESTON_ID_PLATFORM_NAME", "The Keston Group"),

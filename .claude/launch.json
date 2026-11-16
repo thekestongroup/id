@@ -5,7 +5,7 @@
       "name": "keston-id",
       "runtimeExecutable": "go",
       "runtimeArgs": ["run", "./cmd/keston-id"],
-      "port": 4444
+      "port": 8080
     }
   ]
 }

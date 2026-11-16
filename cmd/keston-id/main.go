@@ -328,7 +328,7 @@ func platformAdmin(ctx context.Context, st *store.Store, args []string) error {
 func healthcheck() error {
 	addr := os.Getenv("KESTON_ID_ADDR")
 	if addr == "" {
-		addr = ":4444"
+		addr = ":8080"
 	}
 	if strings.HasPrefix(addr, ":") {
 		addr = "127.0.0.1" + addr

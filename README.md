@@ -111,7 +111,7 @@ docker compose up -d --scale keston-id=3
 ## Run it without Docker
 
 Needs Go 1.27+, pnpm and Postgres. Keston ID is then at
-http://id.keston.localhost:4444.
+http://id.keston.localhost:8080.
 
 ```bash
 pnpm -C web install && pnpm -C web build
