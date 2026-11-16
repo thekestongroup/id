@@ -2,7 +2,7 @@
 
 The OpenID Connect identity provider for every Keston app, at
 **https://id.keston.co**. People sign in once with their Keston account;
-apps (Keston Learn, Keston Schools, Keston Work, partners) get standard
+apps (Keston Learn, Keston Forms, Keston Work, partners) get standard
 OIDC tokens.
 
 - **Backend:** Go, [zitadel/oidc](https://github.com/zitadel/oidc) (OpenID

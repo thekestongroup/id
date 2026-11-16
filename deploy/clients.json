@@ -46,16 +46,16 @@
     "builtin": true
   },
   {
-    "id": "schools",
-    "name": "Keston Schools",
+    "id": "forms",
+    "name": "Keston Forms",
     "publisher": "The Keston Group",
     "verification": "owned",
-    "secretEnv": "KESTON_SCHOOLS_CLIENT_SECRET",
+    "secretEnv": "KESTON_FORMS_CLIENT_SECRET",
     "redirectUris": [
-      "https://schools.keston.co/callback"
+      "https://forms.keston.co/callback"
     ],
     "postLogoutRedirectUris": [
-      "https://schools.keston.co/"
+      "https://forms.keston.co/"
     ],
     "requiredScopes": [
       "openid",
@@ -63,11 +63,11 @@
       "email"
     ],
     "optionalScopes": [
-      "students:read",
+      "forms:read",
       "offline_access"
     ],
-    "privacyUrl": "https://schools.keston.co/privacy",
-    "termsUrl": "https://schools.keston.co/terms",
+    "privacyUrl": "https://forms.keston.co/privacy",
+    "termsUrl": "https://forms.keston.co/terms",
     "builtin": true
   },
   {
