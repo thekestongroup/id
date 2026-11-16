@@ -63,6 +63,8 @@ func (a *API) Routes() http.Handler {
 
 	r.Get("/organisations", a.listOrganisations)
 	r.Post("/organisations", a.createOrganisation)
+	r.Get("/platform-settings", a.getPlatformSettings)
+	r.Put("/platform-settings", a.putPlatformSettings)
 	r.Get("/notifications", a.notifications)
 	r.Post("/notifications/read", a.readNotifications)
 	r.Delete("/notifications", a.clearNotifications)
@@ -79,6 +81,7 @@ func (a *API) Routes() http.Handler {
 		r.Post("/lockout", a.startLockout)
 		r.Post("/lockout/{lockoutID}/{decision:deny|cancel}", a.decideLockout)
 		r.Post("/support/open", a.openSupportAccount)
+		r.Post("/verify", a.verifyOrganisation)
 		r.Post("/deletion", a.scheduleDeletion)
 		r.Delete("/deletion", a.cancelDeletion)
 
