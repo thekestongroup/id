@@ -12,8 +12,9 @@ OIDC tokens.
   Go binary.
 - **Runs as:** one small, stateless container. All state (sessions, signing
   keys, tokens) is in Postgres, so you can run as many replicas as you like
-  behind a load balancer with no sticky sessions, and move to Kubernetes
-  later without changes.
+  behind a load balancer with no sticky sessions. Live, it runs as the Azure
+  Container App `keston-id` behind Cloudflare (see
+  [Live on Azure](#live-on-azure)).
 
 ## What it does
 
@@ -32,7 +33,7 @@ to apps, an admin UI for users and apps (use the CLI below for now).
 ## Layout
 
 ```
-cmd/keston-id/       main: serve, migrate, clients sync, users create, healthcheck
+cmd/keston-id/       main: serve, migrate, clients sync, orgs/users commands, healthcheck
 internal/config/     settings from environment variables
 internal/db/         Postgres pool, migrations (db/migrations/*.sql)
 internal/store/      every SQL query
@@ -41,7 +42,7 @@ internal/api/        JSON API for the web UI (/api/…)
 internal/server/     routes: OIDC endpoints, /api, the web UI, health checks
 internal/secret/     AES-GCM for secrets at rest, Argon2id, random tokens
 web/                 Vue + Keston UI; web/dist is embedded by web/embed.go
-deploy/              apps to register (clients.local.json, clients.json), Caddyfile
+deploy/              apps to register (clients.local.json, clients.json), Caddyfile (local/legacy VPS only)
 ```
 
 ## Endpoints
@@ -63,7 +64,7 @@ deploy/              apps to register (clients.local.json, clients.json), Caddyf
 | Keston Work | http://work.keston.localhost | https://work.keston.co |
 
 Browsers send every `*.localhost` name to your own machine, so the local
-addresses need no hosts-file changes. Caddy (in `compose.yaml`) routes each
+addresses need no hosts-file changes. Locally, Caddy (in `compose.yaml`) routes each
 name to the right container. Until the Keston Work app exists,
 `work.keston.localhost` is a stand-in page that shows what Keston ID sent
 back (see `deploy/Caddyfile`).
@@ -104,8 +105,10 @@ docker compose run --rm -it keston-id users reset-password -email you@keston.sch
 
 `reset-password` reads the new password from `KESTON_ID_PASSWORD` or asks for it,
 checks it against the organisation's password rules, unlocks the account and
-signs it out everywhere, as an admin's reset in Keston Admin does. On Cloud
-Run, run the same arguments as a job, with the password from a secret.
+signs it out everywhere, as an admin's reset in Keston Admin does. Live, run
+the same commands inside the Azure container (see
+[Command-line administration](#command-line-administration)); never paste
+passwords into chat or scripts.
 
 ### Local test account
 
@@ -120,7 +123,7 @@ off. If MFA gets turned on and you lose the code, an admin can turn it off in
 Keston Admin, or start again with
 `docker compose down -v` (this deletes the local database).
 
-Run several replicas behind Caddy, as on the VPS:
+Run several replicas behind Caddy locally:
 
 ```bash
 docker compose up -d --scale keston-id=3
@@ -155,27 +158,63 @@ With an `http://` issuer, Keston ID runs in development mode: cookies aren't
 `Secure` and a built-in secret key is used. An `https://` issuer refuses to
 start without a real `KESTON_ID_SECRET_KEY`.
 
-## Live on the VPS
+## Live on Azure
 
-1. Point DNS for `id.keston.co` and `work.keston.co` at the VPS, and open
-   ports 80 and 443.
-2. Next to `compose.yaml`, copy `.env.live.example` to `.env` and fill it in:
-   the secret key, a Postgres password and each app's client secret. Keep
-   the secret key safe and backed up: it decrypts signing keys and MFA
-   secrets.
-3. Start it:
+Live is **https://id.keston.co**: the Container App `keston-id` in the
+`rg-keston-prod` resource group (UK South), fronted by Cloudflare's proxy,
+with Postgres 17 Flexible Server (private), secrets in Key Vault and images in
+the `kestonprodacr` registry. It is defined in the **infra** repo
+(`platform.bicep`, `apps.bicep`), whose README is the runbook from a fresh
+Azure account to a working site, including DNS, Cloudflare rules, first admin
+account, routine updates and troubleshooting. `compose.yaml`, `deploy/Caddyfile`
+and `.env.live.example` here are for local development and the legacy VPS, not
+for live.
 
-   ```bash
-   docker compose up -d --build --scale keston-id=2
-   ```
+Routine update of live (code only), from this repo:
 
-   Caddy gets HTTPS certificates for both names automatically, and spreads
-   requests across the replicas.
-4. Back up the `postgres` volume.
+```bash
+az acr build -r kestonprodacr -t "id:$(git rev-parse --short HEAD)" -t id:latest .
+az containerapp update -g rg-keston-prod -n keston-id --image kestonprodacr.azurecr.io/id:$(git rev-parse --short HEAD)
+```
 
-For Kubernetes later: the same image (`ghcr.io/thekestongroup/id`),
-`keston-id clients sync …` as a Job, `serve` as a Deployment, `/healthz` and
-`/readyz` as liveness and readiness probes, and an Ingress in place of Caddy.
+If `deploy/clients.json` or the migrations changed, run the
+`keston-id-clients-sync` job first (infra README, "Routine updates"). Keep
+`KESTON_ID_SECRET_KEY` (Key Vault secret `keston-id-secret-key`) safe and never
+regenerate it: it decrypts signing keys and MFA secrets.
+
+### Command-line administration
+
+The binary has a few administrative commands. Locally use
+`docker compose run --rm [-it] keston-id <command>`; live, run them in the
+container:
+
+```bash
+az containerapp exec -g rg-keston-prod -n keston-id --command "/keston-id users role -email you@thekestongroup.com -role global_admin"
+```
+
+`exec` splits the command on spaces, so values can't contain spaces (set full
+names later at https://id.keston.co/account). With Homebrew's az CLI, prefix
+`WEBSOCKET_CLIENT_CA_BUNDLE=<path to az's certifi cacert.pem>` if you get
+`CERTIFICATE_VERIFY_FAILED` (see the infra README, Troubleshooting).
+
+| Command | |
+|---|---|
+| `keston-id migrate` | Apply database migrations and exit |
+| `keston-id clients sync FILE` | Register / update apps from a JSON file |
+| `keston-id orgs create -name … -domain … -admin-username … -admin-name … [-platform-admin]` | Create an organisation and its first global admin. Not for The Keston Group: that platform organisation is created automatically on every start (`KESTON_ID_PLATFORM_NAME`, `KESTON_ID_PLATFORM_DOMAIN`) |
+| `keston-id users create -email … -name … [-role global_admin] [-platform-admin]` | Create an account in an existing organisation (by email domain). Prompts for a password, or reads `KESTON_ID_PASSWORD` |
+| `keston-id users platform-admin -email … [-off]` | Make an account a platform admin (or remove it) |
+| `keston-id users role -email … -role member\|global_admin` | Change an account's role. Keston Admin needs `global_admin` to show Users, Groups, Apps and Settings |
+| `keston-id users unlock -email …` | Unlock an account locked by failed sign-ins |
+| `keston-id users reset-password -email …` | Set a new password (also unlocks, and signs the person out everywhere) |
+
+### Legacy: single VPS
+
+The previous live setup ran this repo's `compose.yaml` with Caddy on a VPS.
+It still works for a small self-hosted install, but it is not how Keston runs
+now: point DNS at the VPS and open ports 80 and 443, copy `.env.live.example`
+to `.env` and fill it in, then `docker compose up -d --build --scale keston-id=2`
+and back up the `postgres` volume.
 
 ## Registering an app
 

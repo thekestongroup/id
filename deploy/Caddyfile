@@ -1,9 +1,14 @@
 # Caddy: the front door for Keston apps. It routes by hostname and spreads
 # requests across every keston-id replica (docker compose --scale).
 #
-#   local: http://id.keston.localhost, http://work.keston.localhost
-#   live:  https://id.keston.co, https://work.keston.co (certificates are
-#          automatic: point DNS at the VPS and open ports 80 and 443)
+# This Caddyfile is for LOCAL DEVELOPMENT (docker compose) and the legacy
+# single-VPS setup. The live service does not use it: https://id.keston.co and
+# https://admin.keston.co run on Azure Container Apps behind Cloudflare, which
+# does TLS, routing and load balancing (see the infra repo's README).
+#
+#   local:  http://id.keston.localhost, http://work.keston.localhost
+#   legacy: https://id.keston.co, https://work.keston.co on a VPS (certificates
+#           are automatic: point DNS at the VPS and open ports 80 and 443)
 #
 # The site addresses come from .env (see compose.yaml for the defaults).
 

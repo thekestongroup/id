@@ -5,8 +5,11 @@
 #   http://work.keston.localhost   Keston Work (a stand-in until the app exists)
 #   http://admin.keston.localhost  Keston Admin (run the admin repo's compose too)
 #
-# Live on the VPS: copy .env.live.example to .env and fill it in. The same
-# file then serves https://id.keston.co and https://work.keston.co.
+# This file is for LOCAL DEVELOPMENT. The live service (https://id.keston.co)
+# runs on Azure Container Apps behind Cloudflare, not from this file: see the
+# infra repo's README (runbook). It can still run on a single VPS (legacy
+# setup: copy .env.live.example to .env and fill it in), but that is no longer
+# the live path.
 #
 # More replicas: docker compose up -d --scale keston-id=3. Each is stateless
 # (sessions, keys and tokens are in Postgres), so Caddy spreads requests
@@ -14,7 +17,9 @@
 
 name: keston
 
-# Settings every keston-id container shares. Defaults are for local use.
+# Settings every keston-id container shares. Defaults are for local use. (Live
+# on Azure, the same variables are set on the Container App; secrets come from
+# Key Vault.)
 x-keston-id-env: &keston-id-env
   KESTON_ID_ISSUER: ${KESTON_ID_ISSUER:-http://id.keston.localhost}
   KESTON_ID_SECRET_KEY: ${KESTON_ID_SECRET_KEY:-}
@@ -62,7 +67,8 @@ services:
       retries: 10
 
   # One-off, before any replica serves: migrations, then register the apps
-  # (deploy/clients.local.json locally, deploy/clients.json live).
+  # (deploy/clients.local.json locally, deploy/clients.json live). On Azure the
+  # equivalent is the keston-id-clients-sync Container Apps job.
   setup:
     build: .
     image: ghcr.io/thekestongroup/id:latest
