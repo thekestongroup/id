@@ -37,8 +37,9 @@ type User struct {
 	OrganisationID string
 	Organisation   string // the organisation's name
 	Role           string // "member" or "global_admin"
-	// Keston staff: in the platform organisation (The Keston Group), as a
-	// global admin or marked platform_admin.
+	// Keston staff (TKG Admin): in the platform organisation (The Keston
+	// Group) and marked platform_admin. A global admin of that organisation
+	// isn't one unless they're marked.
 	PlatformAdmin bool
 	// A support account: the Keston staff member it's for (nil: a normal
 	// account), and when it stops working.
@@ -65,7 +66,7 @@ type User struct {
 const userColumns = `id, email, name, organisation_id,
 	(SELECT o.name FROM organisations o WHERE o.id = users.organisation_id) AS organisation_name, role,
 	(EXISTS (SELECT 1 FROM organisations p WHERE p.id = users.organisation_id AND p.is_platform)
-		AND (platform_admin OR role = 'global_admin')) AS is_platform_admin,
+		AND platform_admin) AS is_platform_admin,
 	support_for, expires_at, picture_updated_at,
 	password_hash, password_changed_at, totp_secret, totp_enabled, backup_codes, status, failed_logins, locked_until,
 	created_at,
@@ -97,8 +98,7 @@ type NewUser struct {
 	Email          string
 	Name           string
 	Role           string
-	// Keston staff: in the platform organisation (The Keston Group), as a
-	// global admin or marked platform_admin.
+	// Keston staff (TKG Admin): only counts in the platform organisation.
 	PlatformAdmin bool
 	// A support account: the Keston staff member it's for (nil: a normal
 	// account), and when it stops working.
@@ -184,6 +184,13 @@ func (s *Store) ResetPassword(ctx context.Context, userID, hash string) error {
 // Unlock clears the lock from too many failed sign-ins.
 func (s *Store) Unlock(ctx context.Context, userID string) error {
 	_, err := s.DB.Exec(ctx, `UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1`, userID)
+	return err
+}
+
+// SetPlatformAdminByID marks or unmarks a user as a TKG Admin (it only takes
+// effect for users in the platform organisation).
+func (s *Store) SetPlatformAdminByID(ctx context.Context, userID string, on bool) error {
+	_, err := s.DB.Exec(ctx, `UPDATE users SET platform_admin = $2, updated_at = now() WHERE id = $1`, userID, on)
 	return err
 }
 

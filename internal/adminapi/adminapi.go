@@ -521,6 +521,9 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Role     string `json:"role"`
+		// TKG Admin: a global admin of The Keston Group who sees every
+		// organisation. Only platform admins can set it, and only there.
+		PlatformAdmin bool `json:"platformAdmin"`
 		// Keston ID makes up a password meeting the policy (Password is
 		// ignored), returned once in the response.
 		GeneratePassword bool `json:"generatePassword"`
@@ -546,6 +549,12 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "role", "Only global admins can add global admins.")
 		return
 	}
+	if body.PlatformAdmin {
+		if msg := platformAdminProblem(org, caller(r), nil, body.Role, true); msg != "" {
+			writeFieldError(w, "role", msg)
+			return
+		}
+	}
 	switch {
 	case name == "" || len(name) > 200:
 		writeFieldError(w, "name", "Enter their name")
@@ -562,7 +571,7 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := a.store.CreateUser(r.Context(), a.store.DB, store.NewUser{
 		OrganisationID: org.ID, Email: user + "@" + org.Domain, Name: name, Role: body.Role,
-		PasswordHash: secret.HashPassword(body.Password),
+		PasswordHash: secret.HashPassword(body.Password), PlatformAdmin: body.PlatformAdmin,
 	})
 	if isUniqueViolation(err) {
 		if existing, _ := a.store.UserByEmail(r.Context(), user+"@"+org.Domain); existing != nil &&
@@ -584,7 +593,7 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	slog.Info("account created", "user", created.ID, "organisation", org.ID, "by", caller(r).ID)
-	a.audit(r, store.ActionUserCreated, aboutUser(created), "Role: "+roleLabel(created.Role))
+	a.audit(r, store.ActionUserCreated, aboutUser(created), "Role: "+roleLabel(created.Role)+platformSuffix(created.PlatformAdmin))
 	if len(body.Licences) > 0 && !a.setLicences(w, r, created, body.Licences) {
 		return
 	}
@@ -828,6 +837,8 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 		Name     *string `json:"name"`
 		Username *string `json:"username"`
 		Role     *string `json:"role"`
+		// TKG Admin on or off (platform admins only, in The Keston Group).
+		PlatformAdmin *bool `json:"platformAdmin"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -849,6 +860,38 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		e := un + "@" + organisation(r).Domain
 		email = &e
+	}
+	platformBefore := u.PlatformAdmin
+	if body.Role != nil && *body.Role != "member" && *body.Role != "global_admin" {
+		writeFieldError(w, "role", "Choose member or global admin")
+		return
+	}
+	if body.PlatformAdmin != nil || (body.Role != nil && *body.Role == "member" && u.PlatformAdmin) {
+		on := u.PlatformAdmin
+		if body.PlatformAdmin != nil {
+			on = *body.PlatformAdmin
+		}
+		if body.Role != nil && *body.Role == "member" && u.PlatformAdmin && body.PlatformAdmin == nil {
+			// Dropping to a plain user takes TKG Admin away with it.
+			on = false
+		}
+		role := u.Role
+		if body.Role != nil {
+			role = *body.Role
+		}
+		if on != u.PlatformAdmin {
+			if msg := platformAdminProblem(organisation(r), caller(r), u, role, on); msg != "" {
+				writeFieldError(w, "role", msg)
+				return
+			}
+			if err := a.store.SetPlatformAdminByID(r.Context(), u.ID, on); err != nil {
+				serverError(w, r, err)
+				return
+			}
+		} else if on && role != "global_admin" {
+			writeFieldError(w, "role", "A TKG Admin has to be a global admin too.")
+			return
+		}
 	}
 	if body.Role != nil {
 		if *body.Role != "member" && *body.Role != "global_admin" {
@@ -883,7 +926,8 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 		roleAfter = *body.Role
 	}
 	if s := summary(change("Name", u.Name, updated.Name), change("Email", u.Email, updated.Email),
-		change("Role", roleLabel(u.Role), roleLabel(roleAfter))); s != "" {
+		change("Role", roleLabel(u.Role), roleLabel(roleAfter)),
+		change("TKG Admin", onOff(platformBefore), onOff(updated.PlatformAdmin))); s != "" {
 		a.audit(r, store.ActionUserUpdated, aboutUser(updated), s)
 	}
 	writeJSON(w, http.StatusOK, a.withPasskeyCount(r, a.userView(updated)))
@@ -1021,4 +1065,30 @@ func (a *API) disableMFA(w http.ResponseWriter, r *http.Request) {
 	a.audit(r, store.ActionUserMFADisabled, aboutUser(u), "")
 	updated, _ := a.store.UserByID(r.Context(), u.ID)
 	writeJSON(w, http.StatusOK, a.withPasskeyCount(r, a.userView(updated)))
+}
+
+// platformAdminProblem says why a TKG Admin change isn't allowed (empty: it
+// is). target is nil when creating someone. Making or removing a TKG Admin
+// takes a TKG Admin, only in the platform organisation, and only for a
+// global admin; nobody can remove their own, so access can't be lost by
+// accident.
+func platformAdminProblem(org *store.Organisation, by, target *store.User, role string, on bool) string {
+	switch {
+	case !by.PlatformAdmin:
+		return "Only TKG Admins can change who's a TKG Admin."
+	case !org.IsPlatform:
+		return "TKG Admin is only for The Keston Group's own users."
+	case on && role != "global_admin":
+		return "A TKG Admin has to be a global admin too."
+	case !on && target != nil && target.ID == by.ID:
+		return "You can't remove your own TKG Admin access."
+	}
+	return ""
+}
+
+func platformSuffix(on bool) string {
+	if on {
+		return " (TKG Admin)"
+	}
+	return ""
 }

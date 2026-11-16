@@ -14,7 +14,7 @@ import (
 	"github.com/thekestongroup/id/internal/store"
 )
 
-// platformAdmin: a global admin of The Keston Group's organisation.
+// platformAdmin: a TKG Admin (global admin and platform admin) of The Keston Group's organisation.
 func (e *env) platformAdmin() (*store.Organisation, *store.User) {
 	e.t.Helper()
 	ctx := context.Background()
@@ -31,7 +31,7 @@ func (e *env) platformAdmin() (*store.Organisation, *store.User) {
 	}
 	name := "staff" + secret.Hash(secret.Token())[:6]
 	u, err := e.st.CreateUser(ctx, e.st.DB, store.NewUser{OrganisationID: org.ID, Email: name + "@" + org.Domain,
-		Name: name, Role: "global_admin", PasswordHash: secret.HashPassword("x")})
+		Name: name, Role: "global_admin", PlatformAdmin: true, PasswordHash: secret.HashPassword("x")})
 	if err != nil {
 		e.t.Fatal(err)
 	}
