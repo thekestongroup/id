@@ -177,6 +177,12 @@ func (s *Store) ResetPassword(ctx context.Context, userID, hash string) error {
 	return tx.Commit(ctx)
 }
 
+// Unlock clears the lock from too many failed sign-ins.
+func (s *Store) Unlock(ctx context.Context, userID string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1`, userID)
+	return err
+}
+
 func (s *Store) SetPlatformAdmin(ctx context.Context, email string, on bool) error {
 	tag, err := s.DB.Exec(ctx, `UPDATE users SET platform_admin = $2 WHERE lower(email) = lower($1)`, email, on)
 	if err == nil && tag.RowsAffected() == 0 {
