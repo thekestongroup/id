@@ -2,6 +2,7 @@ package adminapi
 
 import (
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -80,14 +81,38 @@ func permLabels(ids []string) string {
 
 // ── Reading the logs ─────────────────────────────────────────────────────
 
-// logFilter reads the filters both logs share: user, from, to (dates, or
-// times), before (paging) and limit.
+// listParam reads a parameter that can name several values, repeated
+// (?user=a&user=b) or comma-separated (?user=a,b). Empty values are dropped
+// and duplicates are removed.
+func listParam(q url.Values, name string) []string {
+	out := []string{}
+	for _, v := range q[name] {
+		for _, part := range strings.Split(v, ",") {
+			if part = strings.TrimSpace(part); part != "" && !slices.Contains(out, part) {
+				out = append(out, part)
+			}
+		}
+	}
+	return out
+}
+
+// maxFilterValues: values of one multi-value filter (users, reasons, …).
+const maxFilterValues = 100
+
+// logFilter reads the filters both logs share: user (one or more), from, to
+// (dates, or times), before (paging) and limit.
 func logFilter(w http.ResponseWriter, r *http.Request) (store.LogFilter, bool) {
 	q := r.URL.Query()
-	f := store.LogFilter{OrganisationID: organisation(r).ID, UserID: q.Get("user")}
-	if f.UserID != "" && !store.IsUUID(f.UserID) {
-		writeFieldError(w, "user", "That user doesn't exist.")
+	f := store.LogFilter{OrganisationID: organisation(r).ID, UserIDs: listParam(q, "user")}
+	if len(f.UserIDs) > maxFilterValues {
+		writeFieldError(w, "user", "Choose up to 100 users.")
 		return f, false
+	}
+	for _, id := range f.UserIDs {
+		if !store.IsUUID(id) {
+			writeFieldError(w, "user", "That user doesn't exist.")
+			return f, false
+		}
 	}
 	for _, p := range []struct {
 		name string
@@ -148,16 +173,14 @@ func page[T any](entries []T, next int64) map[string]any {
 	return map[string]any{"entries": entries, "next": n}
 }
 
-// GET …/audit-log?user=&action=a,b&from=&to=&before=&limit=: what admins
+// GET …/audit-log?user=a&user=b&action=a,b&from=&to=&before=&limit=: what admins
 // did here, newest first.
 func (a *API) auditLog(w http.ResponseWriter, r *http.Request) {
 	f, ok := logFilter(w, r)
 	if !ok {
 		return
 	}
-	if v := r.URL.Query().Get("action"); v != "" {
-		f.Actions = strings.Split(v, ",")
-	}
+	f.Actions = listParam(r.URL.Query(), "action")
 	entries, next, err := a.store.AuditLog(r.Context(), f)
 	if err != nil {
 		serverError(w, r, err)
@@ -166,7 +189,7 @@ func (a *API) auditLog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page(entries, next))
 }
 
-// GET …/sign-ins?user=&result=success|failure&reason=&from=&to=&before=&limit=:
+// GET …/sign-ins?user=a&user=b&result=success|failure&reason=a&reason=b&from=&to=&before=&limit=:
 // sign-in attempts here, newest first.
 func (a *API) signIns(w http.ResponseWriter, r *http.Request) {
 	f, ok := logFilter(w, r)
@@ -180,7 +203,11 @@ func (a *API) signIns(w http.ResponseWriter, r *http.Request) {
 	case "failure":
 		f.Success = new(bool)
 	}
-	f.Reason = r.URL.Query().Get("reason")
+	f.Reasons = listParam(r.URL.Query(), "reason")
+	if len(f.Reasons) > maxFilterValues {
+		writeFieldError(w, "reason", "Choose up to 100 reasons.")
+		return
+	}
 	entries, next, err := a.store.SignIns(r.Context(), f)
 	if err != nil {
 		serverError(w, r, err)
