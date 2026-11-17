@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"github.com/thekestongroup/id/internal/clientip"
 	"log/slog"
 	"net/http"
 
@@ -63,7 +64,7 @@ func (a *API) putPlatformSettings(w http.ResponseWriter, r *http.Request) {
 		onOff := map[bool]string{true: "On", false: "Off"}
 		a.store.Audit(r.Context(), store.AuditEntry{OrganisationID: u.OrganisationID, Actor: u,
 			Action: store.ActionPlatformSettings, TargetType: store.TargetOrganisation, TargetID: u.OrganisationID,
-			TargetName: u.Organisation, IP: clientIP(r),
+			TargetName: u.Organisation, IP: clientip.From(r),
 			Summary: "Require verification for new organisations: " + onOff[before] + " → " +
 				onOff[*body.RequireOrganisationVerification]})
 	}

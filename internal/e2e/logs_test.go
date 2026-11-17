@@ -14,6 +14,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"fmt"
+	"github.com/thekestongroup/id/internal/clientip"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -89,6 +90,7 @@ func setup(t *testing.T) *env {
 	verifier := auth.NewVerifier(issuer, auth.AudienceKestonID, auth.StaticKeys{pub})
 	admin := adminapi.New(st, issuer)
 	cfg := &config.Config{Issuer: issuer, SessionTTL: time.Hour, AuthRequestTTL: time.Hour}
+	clientip.Configure(clientip.Cloudflare) // the tests send CF-Connecting-IP from loopback
 	r := chi.NewRouter()
 	id := api.New(st, cfg, func(context.Context, string) error { return nil })
 	r.Mount("/api", id.Routes())
@@ -132,7 +134,7 @@ func (e *env) call(tok, method, path string, body any, ip string) (int, []byte) 
 	req, _ := http.NewRequest(method, e.srv.URL+"/v1"+path, rd)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	if ip != "" {
-		req.Header.Set("X-Forwarded-For", ip)
+		req.Header.Set("CF-Connecting-IP", ip)
 	}
 	res, err := e.srv.Client().Do(req)
 	if err != nil {
@@ -182,7 +184,7 @@ func (b *browser) post(path string, body any) (int, string) {
 	req.Header.Set("X-Keston-ID", "1")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "e2e-browser/1.0")
-	req.Header.Set("X-Forwarded-For", "198.51.100.9")
+	req.Header.Set("CF-Connecting-IP", "198.51.100.9")
 	res, err := b.c.Do(req)
 	if err != nil {
 		b.e.t.Fatal(err)
@@ -198,7 +200,7 @@ func (b *browser) get(path string) (int, string) {
 		path = "/api" + path
 	}
 	req, _ := http.NewRequest(http.MethodGet, b.e.srv.URL+path, nil)
-	req.Header.Set("X-Forwarded-For", "198.51.100.9")
+	req.Header.Set("CF-Connecting-IP", "198.51.100.9")
 	res, err := b.c.Do(req)
 	if err != nil {
 		b.e.t.Fatal(err)

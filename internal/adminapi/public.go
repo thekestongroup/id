@@ -1,8 +1,8 @@
 package adminapi
 
 import (
+	"github.com/thekestongroup/id/internal/clientip"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -103,10 +103,10 @@ func (a *API) signUp(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	slog.Info("organisation signed up", "organisation", org.ID, "domain", domain, "ip", clientIP(r))
+	slog.Info("organisation signed up", "organisation", org.ID, "domain", domain, "ip", clientip.From(r))
 	a.store.Audit(r.Context(), store.AuditEntry{OrganisationID: org.ID, Actor: admin,
 		Action: store.ActionOrganisationCreated, TargetType: store.TargetOrganisation, TargetID: org.ID,
-		TargetName: org.Name, Summary: "Signed up", IP: clientIP(r)})
+		TargetName: org.Name, Summary: "Signed up", IP: clientip.From(r)})
 	writeJSON(w, http.StatusCreated, map[string]any{"organisation": org, "admin": a.userView(admin),
 		"awaitingVerification": !org.Verified})
 }
@@ -149,18 +149,10 @@ func (l *limiter) allow(key string) bool {
 
 func (l *limiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !l.allow(clientIP(r)) {
+		if !l.allow(clientip.From(r)) {
 			writeError(w, http.StatusTooManyRequests, "rate_limited", "Too many tries. Wait a little and try again.")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func clientIP(r *http.Request) string {
-	if f := r.Header.Get("X-Forwarded-For"); f != "" {
-		return strings.TrimSpace(strings.Split(f, ",")[0])
-	}
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
-	return host
 }

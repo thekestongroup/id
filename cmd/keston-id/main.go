@@ -22,6 +22,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/thekestongroup/id/internal/clientip"
 	"log/slog"
 	"net/http"
 	"os"
@@ -64,6 +65,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	clientip.Configure(cfg.TrustedProxy)
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err

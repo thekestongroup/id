@@ -182,6 +182,28 @@ If `deploy/clients.json` or the migrations changed, run the
 `KESTON_ID_SECRET_KEY` (Key Vault secret `keston-id-secret-key`) safe and never
 regenerate it: it decrypts signing keys and MFA secrets.
 
+### Client IP addresses behind Cloudflare
+
+Sign-in logs, the admin audit log and IP-range rules (MFA rules, app access
+rules) use the visitor's address, worked out in one place
+(`internal/clientip`). `KESTON_ID_TRUSTED_PROXY` chooses how:
+
+- `none` (default, local development): the TCP peer address. Forwarding
+  headers are ignored, so they can't be spoofed.
+- `cloudflare` (live): `CF-Connecting-IP`, falling back to the right-most
+  public address in `X-Forwarded-For`. Honoured only when the immediate peer
+  is a private/ingress address (10/8, 172.16/12, 192.168/16, 100.64/10 where
+  Azure's ingress proxies sit, loopback) or a Cloudflare range; otherwise the
+  peer address is used. Malformed values are ignored; IPv6 works.
+
+Why that is safe: the Container App's ingress only accepts Cloudflare's IPs
+and the environment subnet (10.40.0.0/23), so a visitor can't reach the app
+directly, and Cloudflare overwrites any `CF-Connecting-IP` the visitor sends.
+Keston Admin's API proxy passes the visitor's `CF-Connecting-IP` through
+untouched (it only drops cookies, Origin and Referer), so admin actions are
+logged with the real address. Calls Keston Admin makes itself (not proxied
+requests) carry no such header and log the internal address.
+
 ### Command-line administration
 
 The binary has a few administrative commands. Locally use

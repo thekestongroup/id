@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"github.com/thekestongroup/id/internal/clientip"
 	"net/http"
 	"net/url"
 	"slices"
@@ -29,7 +30,7 @@ func (a *API) audit(r *http.Request, action string, t about, summary string) {
 
 func (a *API) auditIn(r *http.Request, orgID, action string, t about, summary string) {
 	a.store.Audit(r.Context(), store.AuditEntry{OrganisationID: orgID, Actor: caller(r), Action: action,
-		TargetType: t.typ, TargetID: t.id, TargetName: t.name, Summary: summary, IP: clientIP(r)})
+		TargetType: t.typ, TargetID: t.id, TargetName: t.name, Summary: summary, IP: clientip.From(r)})
 }
 
 // change is "Label: before → after", or "" if it didn't change.

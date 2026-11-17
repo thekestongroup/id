@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/thekestongroup/id/internal/clientip"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -241,7 +242,7 @@ func (a *API) passkeySignIn(w http.ResponseWriter, r *http.Request) {
 	// Required actions (a new password, say) still come first: next()
 	// settles the stage, and runs signedInFully once there are none.
 	token, sess, err := a.store.CreateSession(ctx, user.ID, store.StageActions, []string{"hwk", "mfa"}, r.UserAgent(),
-		clientIP(r), a.cfg.SessionTTL)
+		clientip.From(r), a.cfg.SessionTTL)
 	if err != nil {
 		serverError(w, r, err)
 		return
