@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/store"
 )
 
@@ -21,6 +22,9 @@ type userRow struct {
 	// The groups they're in (only filled in when filtering by group).
 	groups  []string
 	created time.Time
+	// Profile: built-in fields, manager and custom attribute values.
+	Profile profileJSON `json:"profile"`
+	attrs   map[string]profile.Value
 }
 
 // userFilter is what GET …/users?… asks for. Every filter is optional; the
@@ -33,27 +37,41 @@ type userRow struct {
 //	licence  a product's ID, or "none" for nobody-licensed
 //	group    a group's ID
 //	mfa      on | off
-//	sort     name | email | role | status | created (default name)
+//	department, jobTitle   their value (case-insensitive)
+//	manager  a user's ID (their reports), or "none"
+//	attr.<key>  a custom attribute's value ("none": not set)
+//	sort     name | email | role | status | created | department | jobTitle | manager | attr.<key> (default name)
 //	dir      asc | desc (default asc)
 type userFilter struct {
 	q                string
 	roles, statuses  []string
 	licences, groups []string
 	mfa              string
+	departments      []string
+	jobTitles        []string
+	managers         []string
+	attrFilters      map[string][]string
 	sort             string
 	desc             bool
 }
 
 var (
 	userStatuses = []string{"active", "disabled", "locked"}
-	userSorts    = []string{"name", "email", "role", "status", "created"}
+	userSorts    = []string{"name", "email", "role", "status", "created", "department", "jobTitle", "manager"}
 )
 
 func userFilterFrom(w http.ResponseWriter, r *http.Request) (userFilter, bool) {
 	q := r.URL.Query()
 	f := userFilter{q: strings.ToLower(strings.TrimSpace(q.Get("q"))), roles: listParam(q, "role"),
 		statuses: listParam(q, "status"), licences: listParam(q, "licence"), groups: listParam(q, "group"),
-		mfa: q.Get("mfa"), sort: q.Get("sort"), desc: q.Get("dir") == "desc"}
+		mfa: q.Get("mfa"), sort: q.Get("sort"), desc: q.Get("dir") == "desc",
+		departments: lowerAll(listParam(q, "department")), jobTitles: lowerAll(listParam(q, "jobTitle")),
+		managers: listParam(q, "manager"), attrFilters: map[string][]string{}}
+	for name := range q {
+		if key, ok := strings.CutPrefix(name, "attr."); ok {
+			f.attrFilters[key] = lowerAll(listParam(q, name))
+		}
+	}
 	bad := func(field, msg string) (userFilter, bool) {
 		writeFieldError(w, field, msg)
 		return f, false
@@ -77,8 +95,10 @@ func userFilterFrom(w http.ResponseWriter, r *http.Request) (userFilter, bool) {
 	if f.sort == "" {
 		f.sort = "name"
 	}
-	if !slices.Contains(userSorts, f.sort) {
-		return bad("sort", "Sort by name, email, role, status or created")
+	if key, ok := strings.CutPrefix(f.sort, "attr."); ok && profile.ValidAttributeKey(key) == nil {
+		// sort by a custom attribute
+	} else if !slices.Contains(userSorts, f.sort) {
+		return bad("sort", "Sort by name, email, role, status, created, department, job title, manager or an attribute")
 	}
 	if d := q.Get("dir"); d != "" && d != "asc" && d != "desc" {
 		return bad("dir", "Choose asc or desc")
@@ -142,6 +162,25 @@ func (u userRow) matches(f userFilter) bool {
 	if len(f.groups) > 0 && !slices.ContainsFunc(u.groups, func(g string) bool { return slices.Contains(f.groups, g) }) {
 		return false
 	}
+	if len(f.departments) > 0 && !slices.Contains(f.departments, strings.ToLower(u.Profile.Department)) {
+		return false
+	}
+	if len(f.jobTitles) > 0 && !slices.Contains(f.jobTitles, strings.ToLower(u.Profile.JobTitle)) {
+		return false
+	}
+	if len(f.managers) > 0 && !slices.ContainsFunc(f.managers, func(m string) bool {
+		return m == u.Profile.ManagerID || (m == "none" && u.Profile.ManagerID == "")
+	}) {
+		return false
+	}
+	for key, want := range f.attrFilters {
+		v, has := u.attrs[key]
+		if !slices.ContainsFunc(want, func(w string) bool {
+			return (!has && w == "none") || (has && strings.EqualFold(v.String(), w))
+		}) {
+			return false
+		}
+	}
 	switch f.mfa {
 	case "on":
 		return u.MFA
@@ -170,10 +209,44 @@ func (f userFilter) apply(rows []userRow) []userRow {
 			return rank[a.state()] - rank[b.state()]
 		case "created":
 			return a.created.Compare(b.created)
+		case "department":
+			return strings.Compare(strings.ToLower(a.Profile.Department), strings.ToLower(b.Profile.Department))
+		case "jobTitle":
+			return strings.Compare(strings.ToLower(a.Profile.JobTitle), strings.ToLower(b.Profile.JobTitle))
+		case "manager":
+			return strings.Compare(strings.ToLower(a.Profile.Manager.name()), strings.ToLower(b.Profile.Manager.name()))
+		}
+		if key, ok := strings.CutPrefix(f.sort, "attr."); ok {
+			va, vb := a.attrs[key], b.attrs[key]
+			if va.Number != nil && vb.Number != nil {
+				return cmpFloat(*va.Number, *vb.Number)
+			}
+			if va.Bool != nil && vb.Bool != nil {
+				return cmpFloat(b2f(*va.Bool), b2f(*vb.Bool))
+			}
+			return strings.Compare(strings.ToLower(va.String()), strings.ToLower(vb.String()))
 		}
 		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	}
+	// Sorting by a profile field: people without a value always come last.
+	blank := func(u userRow) bool { return false }
+	switch {
+	case f.sort == "department":
+		blank = func(u userRow) bool { return u.Profile.Department == "" }
+	case f.sort == "jobTitle":
+		blank = func(u userRow) bool { return u.Profile.JobTitle == "" }
+	case f.sort == "manager":
+		blank = func(u userRow) bool { return u.Profile.Manager == nil }
+	case strings.HasPrefix(f.sort, "attr."):
+		blank = func(u userRow) bool { _, ok := u.attrs[strings.TrimPrefix(f.sort, "attr.")]; return !ok }
+	}
 	slices.SortStableFunc(out, func(a, b userRow) int {
+		if ba, bb := blank(a), blank(b); ba != bb {
+			if ba {
+				return 1
+			}
+			return -1
+		}
 		c := cmp(a, b)
 		if f.desc {
 			c = -c
@@ -187,4 +260,36 @@ func (f userFilter) apply(rows []userRow) []userRow {
 		return strings.Compare(a.Email, b.Email)
 	})
 	return out
+}
+
+func lowerAll(in []string) []string {
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = strings.ToLower(v)
+	}
+	return out
+}
+
+func (p *personRef) name() string {
+	if p == nil {
+		return ""
+	}
+	return p.Name
+}
+
+func cmpFloat(a, b float64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
+func b2f(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }

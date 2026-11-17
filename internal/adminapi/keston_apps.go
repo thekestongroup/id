@@ -229,7 +229,7 @@ func (a *API) saveKestonApp(w http.ResponseWriter, r *http.Request, c *store.Cli
 		scopes := []string{"openid"}
 		for _, s := range *body.Scopes {
 			if !slices.Contains(ownAppScopes, s) {
-				writeFieldError(w, "scopes", "Choose from profile, email and offline_access")
+				writeFieldError(w, "scopes", "Choose from profile, email, phone, keston.profile and offline_access")
 				return
 			}
 			if !slices.Contains(scopes, s) {

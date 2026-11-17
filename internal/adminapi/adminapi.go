@@ -615,6 +615,20 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	profiles, err := a.store.ProfilesInOrganisation(r.Context(), organisation(r).ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	attrVals, err := a.store.AttributeValuesInOrganisation(r.Context(), organisation(r).ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	byID := make(map[string]*store.User, len(users))
+	for i := range users {
+		byID[users[i].ID] = &users[i]
+	}
 	mine, admin := callerPerms(r), caller(r).Role == "global_admin"
 	out := make([]userRow, len(users))
 	for i := range users {
@@ -628,7 +642,8 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 		if rs == nil {
 			rs = []string{}
 		}
-		out[i] = userRow{withPasskeys(a.userView(u), passkeys[u.ID]), can, l, rs, groups[u.ID], u.CreatedAt}
+		out[i] = userRow{withPasskeys(a.userView(u), passkeys[u.ID]), can, l, rs, groups[u.ID], u.CreatedAt,
+			profileView(profiles[u.ID], attrVals[u.ID], byID), attrVals[u.ID]}
 	}
 	out = f.apply(out)
 	writeJSON(w, http.StatusOK, out)

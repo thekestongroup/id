@@ -2,6 +2,7 @@
 import { Avatar, Badge, Button, Card, PageHeader, Spinner, SummaryList, formatDateTime, useNotifications } from '@thekestongroup/ui'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { Pencil } from '@lucide/vue'
 import EditProfileSlideover from '../../components/EditProfileSlideover.vue'
 import GuestOrganisationsCard from '../../components/GuestOrganisationsCard.vue'
@@ -9,12 +10,25 @@ import { api, type SessionInfo } from '../../lib/api'
 import { me, signOut } from '../../lib/session'
 
 const router = useRouter()
+const { t } = useI18n()
 const { notify } = useNotifications()
 
 const user = computed(() => me.value!.user)
 // What the organisation lets this person change themselves.
 const editable = computed(() => me.value!.editable)
-const canEdit = computed(() => editable.value.name || editable.value.email || editable.value.picture)
+const canEdit = computed(() => Object.values(editable.value).some(Boolean))
+const workFieldKeys = ['jobTitle', 'department', 'office', 'phone', 'mobile'] as const
+const canEditWork = computed(() => workFieldKeys.some((k) => editable.value[k]))
+const workDetails = computed(() => {
+  const p = me.value!.profile
+  const rows = workFieldKeys.map((k) => ({ label: t('workDetails.' + k), value: p.fields[k] }))
+  rows.push({ label: t('workDetails.employeeId'), value: p.fields.employeeId })
+  rows.push({ label: t('workDetails.manager'), value: p.manager?.name ?? '' })
+  rows.push({ label: t('workDetails.startDate'), value: p.fields.startDate })
+  for (const a of p.attributes)
+    rows.push({ label: a.label, value: typeof a.value === 'boolean' ? t(a.value ? 'workDetails.yes' : 'workDetails.no') : String(a.value) })
+  return rows.filter((r) => r.value)
+})
 const profileNote = computed(() =>
   !canEdit.value
     ? 'Your organisation has restricted changing these.'
@@ -73,6 +87,16 @@ async function end(s: SessionInfo) {
       <Avatar :user="user" size="xl" decorative />
       <SummaryList :items="details" class="min-w-0 flex-1" />
     </div>
+  </Card>
+
+  <Card v-if="workDetails.length || canEditWork" :title="t('workDetails.title')" :description="canEditWork ? t('workDetails.restricted') : t('workDetails.intro')">
+    <template v-if="canEditWork" #actions>
+      <Button size="sm" @click="editing = true">
+        <template #leading><Pencil /></template>
+        Edit
+      </Button>
+    </template>
+    <SummaryList :items="workDetails" />
   </Card>
 
   <EditProfileSlideover v-model:open="editing" />

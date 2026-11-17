@@ -42,7 +42,7 @@ func (a *API) ownAppRoutes(r chi.Router) {
 }
 
 // The scopes an organisation's OpenID Connect app can ask for.
-var ownAppScopes = []string{"openid", "profile", "email", "offline_access"}
+var ownAppScopes = []string{"openid", "profile", "email", "phone", "keston.profile", "offline_access"}
 
 // App types (OpenID Connect).
 const (
