@@ -11,8 +11,10 @@ type ScopeInfo struct {
 
 // "openid" is implied by signing in at all, so it isn't listed on its own.
 var scopeCatalog = map[string]ScopeInfo{
-	"profile": {Label: "View your name and profile picture", Description: "To show who's signed in.", Icon: "user"},
-	"email":   {Label: "View your email address", Description: "The address you sign in with.", Icon: "mail"},
+	"profile":        {Label: "View your name and profile picture", Description: "To show who's signed in.", Icon: "user"},
+	"email":          {Label: "View your email address", Description: "The address you sign in with.", Icon: "mail"},
+	"phone":          {Label: "View your phone number", Description: "Your mobile or work number.", Icon: "phone"},
+	"keston.profile": {Label: "View your job title, department and manager", Description: "Your work details from your organisation.", Icon: "briefcase"},
 	"offline_access": {Label: "Stay connected when you're not using it",
 		Description: "So it can sync in the background. You can disconnect it at any time.", Icon: "refresh-cw"},
 	"students:read": {Label: "View student records at your school",

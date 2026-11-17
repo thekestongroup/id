@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"github.com/thekestongroup/id/internal/clientip"
 	"io"
@@ -38,8 +39,14 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := cur.user
+	prof, err := a.profileView(r, u)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	name, _, _ := strings.Cut(u.Email, "@")
 	writeJSON(w, http.StatusOK, map[string]any{
+		"profile": prof,
 		"user": map[string]any{
 			"id": u.ID, "name": u.Name, "email": u.Email, "username": name, "organisation": u.Organisation,
 			"avatar": profile.PictureURL(a.cfg.Issuer, u.ID, u.PictureUpdatedAt), "role": u.Role,
@@ -390,7 +397,10 @@ func (a *API) updateProfile(w http.ResponseWriter, r *http.Request) {
 		Name     *string `json:"name"`
 		Username *string `json:"username"`
 	}
-	if !decode(w, r, &body) {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	var fields map[string]json.RawMessage
+	if err != nil || json.Unmarshal(raw, &body) != nil || json.Unmarshal(raw, &fields) != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "Couldn't read the request.")
 		return
 	}
 	cur := from(r)
@@ -428,6 +438,25 @@ func (a *API) updateProfile(w http.ResponseWriter, r *http.Request) {
 		e := u + "@" + domain
 		email = &e
 	}
+	// Work details: only the ones the organisation lets people change.
+	before, err := a.store.ProfileOf(ctx, cur.user.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	after, err := before.Patch(fields, func(key string) bool { return org.ProfileEditing.Allows(key) })
+	if err != nil {
+		var fe *profile.FieldError
+		if errors.As(err, &fe) {
+			if fe.Message == "forbidden" {
+				fe.Message = "Your organisation has restricted changing this."
+			}
+			writeFieldError(w, fe.Field, fe.Message)
+			return
+		}
+		serverError(w, r, err)
+		return
+	}
 	user, err := a.store.UpdateProfile(ctx, cur.user.ID, name, email)
 	if isUniqueViolation(err) {
 		writeFieldError(w, "username", "Someone else already has that email.")
@@ -436,6 +465,21 @@ func (a *API) updateProfile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		serverError(w, r, err)
 		return
+	}
+	if after != before {
+		if err := a.store.SetProfile(ctx, user.OrganisationID, user.ID, after); err != nil {
+			serverError(w, r, err)
+			return
+		}
+		var parts []string
+		for _, key := range profile.FieldKeys {
+			if before.Get(key) != after.Get(key) {
+				parts = append(parts, key+" changed")
+			}
+		}
+		a.store.Audit(ctx, store.AuditEntry{OrganisationID: user.OrganisationID, Actor: user, Action: store.ActionUserUpdated,
+			TargetType: store.TargetUser, TargetID: user.ID, TargetName: user.Name,
+			Summary: "Changed their own profile: " + strings.Join(parts, ", "), IP: clientip.From(r)})
 	}
 	writeJSON(w, http.StatusOK, a.viewUser(user))
 }
@@ -486,4 +530,40 @@ func (a *API) removePicture(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// profileView is the person's work details for their account page: read-only
+// custom attributes and their manager included.
+func (a *API) profileView(r *http.Request, u *store.User) (map[string]any, error) {
+	ctx := r.Context()
+	f, err := a.store.ProfileOf(ctx, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	var manager map[string]any
+	if f.ManagerID != "" {
+		if name, email, err := a.store.NameOf(ctx, u.OrganisationID, f.ManagerID); err == nil {
+			manager = map[string]any{"id": f.ManagerID, "name": name, "email": email}
+		} else if !isNotFound(err) {
+			return nil, err
+		}
+	}
+	defs, err := a.store.AttributeDefs(ctx, u.OrganisationID)
+	if err != nil {
+		return nil, err
+	}
+	vals, err := a.store.AttributeValues(ctx, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	attrs := []map[string]any{}
+	for _, d := range defs {
+		if v, ok := vals[d.Key]; ok {
+			attrs = append(attrs, map[string]any{"key": d.Key, "label": d.Label, "type": d.Type, "value": v.JSON()})
+		}
+	}
+	if manager == nil {
+		f.ManagerID = ""
+	}
+	return map[string]any{"fields": f, "manager": manager, "attributes": attrs}, nil
 }

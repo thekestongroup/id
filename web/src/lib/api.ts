@@ -83,6 +83,28 @@ export interface Editable {
   name: boolean
   email: boolean
   picture: boolean
+  jobTitle: boolean
+  department: boolean
+  office: boolean
+  phone: boolean
+  mobile: boolean
+}
+
+/** Work details shown on the account page. */
+export interface WorkProfile {
+  fields: {
+    jobTitle: string
+    department: string
+    office: string
+    phone: string
+    mobile: string
+    employeeId: string
+    managerId: string
+    startDate: string
+  }
+  manager: { id: string; name: string; email: string } | null
+  /** Custom attributes your organisation records about you (read-only). */
+  attributes: { key: string; label: string; type: string; value: string | number | boolean }[]
 }
 
 export interface Me {
@@ -90,6 +112,7 @@ export interface Me {
   username: string
   domain: string
   editable: Editable
+  profile: WorkProfile
   security: {
     /** MFA is on: an authenticator app, or any passkey. */
     mfa: boolean
@@ -254,7 +277,7 @@ export const api = {
     request<Flow>('POST', '/api/accounts/switch', { id, authRequestID }),
 
   me: () => request<Me>('GET', '/v1/me'),
-  updateProfile: (changes: { name?: string; username?: string }) => request<UserView>('PATCH', '/v1/me', changes),
+  updateProfile: (changes: Record<string, string>) => request<UserView>('PATCH', '/v1/me', changes),
   removePicture: () => request<void>('DELETE', '/v1/me/picture', {}),
   /** Uploads a profile picture (PNG, JPEG or GIF, under 2 MB). */
   setPicture: async (file: File): Promise<UserView> => {

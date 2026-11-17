@@ -284,8 +284,41 @@ func (s *Storage) setUserinfo(ctx context.Context, info *oidc.UserInfo, userID s
 		// Accounts are created by schools, with addresses they manage.
 		info.EmailVerified = true
 	}
+	// Work details, only for apps allowed the scope: "phone" (standard
+	// phone_number) and "keston.profile" (job_title, department, manager's
+	// email). Custom attributes are never released.
+	wantPhone, wantWork := slices.Contains(scopes, oidc.ScopePhone), slices.Contains(scopes, ScopeKestonProfile)
+	if wantPhone || wantWork {
+		f, err := s.store.ProfileOf(ctx, u.ID)
+		if err != nil {
+			return err
+		}
+		if wantPhone && (f.Mobile != "" || f.Phone != "") {
+			info.PhoneNumber = f.Mobile
+			if info.PhoneNumber == "" {
+				info.PhoneNumber = f.Phone
+			}
+			info.PhoneNumberVerified = false
+		}
+		if wantWork {
+			if f.JobTitle != "" {
+				info.AppendClaims("job_title", f.JobTitle)
+			}
+			if f.Department != "" {
+				info.AppendClaims("department", f.Department)
+			}
+			if f.ManagerID != "" {
+				if _, email, err := s.store.NameOf(ctx, u.OrganisationID, f.ManagerID); err == nil {
+					info.AppendClaims("manager", email)
+				}
+			}
+		}
+	}
 	return nil
 }
+
+// ScopeKestonProfile releases job title, department and manager.
+const ScopeKestonProfile = "keston.profile"
 
 func (s *Storage) SetUserinfoFromScopes(ctx context.Context, info *oidc.UserInfo, userID, _ string,
 	scopes []string) error {

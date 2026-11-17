@@ -47,7 +47,7 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 		BackChannelLogoutSupported:        true,
 		BackChannelLogoutSessionSupported: true,
 		SupportedUILocales:                []language.Tag{language.BritishEnglish},
-		SupportedScopes:                   []string{"openid", "profile", "email", "offline_access"},
+		SupportedScopes:                   []string{"openid", "profile", "email", "phone", "keston.profile", "offline_access"},
 		SupportedClaims: []string{"sub", "aud", "exp", "iat", "iss", "auth_time", "nonce", "acr", "amr", "c_hash",
 			"at_hash", "name", "preferred_username", "email", "email_verified", "organisation", "updated_at", "picture"},
 	}, storage, op.StaticIssuer(cfg.Issuer), opts...)

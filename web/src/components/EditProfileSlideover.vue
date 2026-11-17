@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ImageUp, Trash2 } from '@lucide/vue'
 import { Avatar, Button, type ButtonStatus, Input, Slideover, useNotifications } from '@thekestongroup/ui'
-import { reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ApiError, api } from '../lib/api'
 import { loadMe, me } from '../lib/session'
 
@@ -11,6 +12,11 @@ import { loadMe, me } from '../lib/session'
  */
 const open = defineModel<boolean>('open', { default: false })
 const { notify } = useNotifications()
+const { t } = useI18n()
+const workKeys = ['jobTitle', 'department', 'office', 'phone', 'mobile'] as const
+const work = reactive<Record<string, string>>({})
+const workErrors = reactive<Record<string, string | undefined>>({})
+const anyEditable = computed(() => !!me.value && (me.value.editable.name || me.value.editable.email || workKeys.some((k) => me.value!.editable[k])))
 
 const form = reactive({ name: '', username: '' })
 const errors = reactive<{ name?: string; username?: string; picture?: string }>({})
@@ -23,6 +29,7 @@ watch(open, (isOpen) => {
   form.name = me.value.user.name
   form.username = me.value.username
   Object.assign(errors, { name: undefined, username: undefined, picture: undefined })
+  for (const k of workKeys) { work[k] = me.value.profile.fields[k]; workErrors[k] = undefined }
   status.value = 'idle'
 })
 
@@ -30,9 +37,10 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 async function save() {
   const m = me.value!
-  const changes: { name?: string; username?: string } = {}
+  const changes: Record<string, string> = {}
   if (m.editable.name && form.name.trim() !== m.user.name) changes.name = form.name.trim()
   if (m.editable.email && form.username.trim().toLowerCase() !== m.username) changes.username = form.username
+  for (const k of workKeys) if (m.editable[k] && work[k].trim() !== m.profile.fields[k]) changes[k] = work[k].trim()
   if (!Object.keys(changes).length) {
     open.value = false
     return
@@ -47,6 +55,7 @@ async function save() {
   } catch (e) {
     status.value = 'idle'
     if (e instanceof ApiError && (e.field === 'name' || e.field === 'username')) errors[e.field] = e.message
+    else if (e instanceof ApiError && e.field && (workKeys as readonly string[]).includes(e.field)) workErrors[e.field] = e.message
     else notify({ type: 'error', title: 'Couldn’t update your profile', description: message(e) })
   }
 }
@@ -116,12 +125,22 @@ async function removePicture() {
         >
           <template #trailing><span class="text-sm text-black/65">@{{ me.domain }}</span></template>
         </Input>
+        <template v-for="k in workKeys" :key="k">
+          <Input
+            v-if="me.editable[k]"
+            v-model="work[k]"
+            :label="t('workDetails.' + k)"
+            :type="k === 'phone' || k === 'mobile' ? 'tel' : 'text'"
+            :helper="k === 'phone' || k === 'mobile' ? t('workDetails.phoneHelper') : undefined"
+            :error-text="workErrors[k]"
+          />
+        </template>
         <button type="submit" class="hidden" tabindex="-1" aria-hidden="true" />
       </form>
     </template>
     <template #footer="{ close }">
-      <Button :disabled="status !== 'idle'" @click="close">{{ me?.editable.name || me?.editable.email ? 'Cancel' : 'Done' }}</Button>
-      <Button v-if="me?.editable.name || me?.editable.email" variant="primary" :status="status" loading-text="Saving" @click="save">
+      <Button :disabled="status !== 'idle'" @click="close">{{ anyEditable ? 'Cancel' : 'Done' }}</Button>
+      <Button v-if="anyEditable" variant="primary" :status="status" loading-text="Saving" @click="save">
         Save
       </Button>
     </template>
