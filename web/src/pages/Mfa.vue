@@ -13,7 +13,7 @@ import { useFlow } from '../lib/useFlow'
  * backup code (whichever this account has). From the TwoStepCode story in
  * Keston UI's "Examples/Keston ID".
  */
-const { authRequestID, client, flow, error: flowError, loading, next } = useFlow('mfa')
+const { authRequestID, client, flow, error: flowError, refused, loading, next } = useFlow('mfa')
 
 type Mode = 'passkey' | 'app' | 'backup'
 const mode = ref<Mode>('app')
@@ -99,7 +99,7 @@ async function switchMode(to: Mode) {
 
 <template>
   <KestonIdPage :brand="client ? 'tkg' : 'kestonId'">
-    <FlowState :loading="loading" :error="flowError">
+    <FlowState :loading="loading" :error="flowError" :refused="refused">
       <Card :ui="{ footer: 'justify-evenly' }">
         <div class="flex flex-col gap-4">
           <div class="flex flex-col gap-1">
