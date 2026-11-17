@@ -117,10 +117,11 @@ func TestOrganisationSummary(t *testing.T) {
 		t.Errorf("helper: %d %+v", code, hs)
 	}
 
-	// Keston staff see any organisation's counts (not its audit log), and an
-	// organisation's admin can't see another's.
-	if code, ps := get(staff, e.org.ID); code != http.StatusOK || ps.Users.Total < 5 || ps.RecentActivity != nil {
-		t.Errorf("platform admin: %d %+v", code, ps)
+	// Keston staff without support access get no counts (see
+	// billing_access_e2e_test.go), and an organisation's admin can't see
+	// another's.
+	if code, _ := get(staff, e.org.ID); code != http.StatusForbidden {
+		t.Errorf("platform admin: %d, want 403", code)
 	}
 	if code, _ := get(admin, other); code != http.StatusNotFound {
 		t.Errorf("another organisation: %d", code)

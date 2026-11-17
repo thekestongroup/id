@@ -74,7 +74,7 @@ func (a *API) Routes() http.Handler {
 		// have any permission in Keston Admin.
 		r.Use(a.requireView)
 		r.Get("/", a.getOrganisation)
-		r.Get("/summary", a.getSummary)
+		r.With(a.needDetails).Get("/summary", a.getSummary)
 		r.Get("/support", a.getSupport)
 		r.Post("/support/requests", a.requestSupport)
 		r.Post("/support/requests/{requestID}/{decision:approve|deny}", a.decideSupport)
@@ -102,7 +102,9 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermResetMFA)).Post("/users/{userID}/mfa/disable", a.disableMFA)
 		r.With(a.need(store.PermResetMFA)).Delete("/users/{userID}/passkeys", a.removePasskeys)
 		r.With(a.need(store.PermDeleteUsers)).Delete("/users/{userID}", a.deleteUser)
-		r.With(a.need(store.PermViewUsers)).Get("/products", a.listProducts)
+		// Licence allocations and use per product (counts only): Keston staff
+		// without support access, and its people who manage users or licences.
+		r.With(a.needLicenceView).Get("/products", a.listProducts)
 		r.Put("/licences", a.putAllocations)
 		r.With(a.need(store.PermViewUsers)).Get("/users/{userID}/apps", a.userApps)
 		r.With(a.need(store.PermViewUsers)).Get("/roles", a.listRoles)
@@ -426,12 +428,74 @@ func (a *API) createOrganisation(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) getOrganisation(w http.ResponseWriter, r *http.Request) {
 	org := organisation(r)
+	perms := permsIn(r, org.ID).List()
+	if !a.canManage(r, org.ID) {
+		// Keston staff without support access: the basic details only, no
+		// settings.
+		writeJSON(w, http.StatusOK, struct {
+			basicOrganisation
+			CanManage   bool     `json:"canManage"`
+			Permissions []string `json:"permissions"`
+		}{newBasicOrganisation(org), false, perms})
+		return
+	}
 	writeJSON(w, http.StatusOK, struct {
 		*store.Organisation
-		CanManage bool `json:"canManage"`
+		// Its domains, the primary one first (for now, one).
+		Domains   []string `json:"domains"`
+		CanManage bool     `json:"canManage"`
 		// What the caller can do here (see store/permissions.go).
 		Permissions []string `json:"permissions"`
-	}{org, a.canManage(r, org.ID), permsIn(r, org.ID).List()})
+	}{org, []string{org.Domain}, true, perms})
+}
+
+// basicOrganisation: what Keston staff can see of any organisation without
+// support access: who it is and its state. No settings, no people.
+type basicOrganisation struct {
+	ID                  string     `json:"id"`
+	Name                string     `json:"name"`
+	Domain              string     `json:"domain"`
+	Domains             []string   `json:"domains"`
+	UserCount           int        `json:"userCount"`
+	CreatedAt           time.Time  `json:"createdAt"`
+	IsPlatform          bool       `json:"isPlatform"`
+	DeletionRequestedAt *time.Time `json:"deletionRequestedAt,omitempty"`
+	DeleteAfter         *time.Time `json:"deleteAfter,omitempty"`
+	Verified            bool       `json:"verified"`
+	VerifiedAt          *time.Time `json:"verifiedAt,omitempty"`
+}
+
+func newBasicOrganisation(o *store.Organisation) basicOrganisation {
+	return basicOrganisation{o.ID, o.Name, o.Domain, []string{o.Domain}, o.UserCount, o.CreatedAt,
+		o.IsPlatform, o.DeletionRequestedAt, o.DeleteAfter, o.Verified, o.VerifiedAt}
+}
+
+// needDetails: the dashboard's data (counts, activity) is about the
+// organisation's people, so it needs access to them: its own people with
+// permissions, or Keston support through a support account. Keston staff
+// without it get the basic details only.
+func (a *API) needDetails(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.canManage(r, organisation(r).ID) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		writeError(w, http.StatusForbidden, "support_access",
+			"To see "+organisation(r).Name+"'s dashboard, open your support account for it. One of its global admins needs to allow support access first.")
+	})
+}
+
+// needLicenceView: licence allocations and use (counts per product, never
+// people): Keston staff in any organisation, and its own people who manage
+// users or licences.
+func (a *API) needLicenceView(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if caller(r).PlatformAdmin || can(r, store.PermViewUsers) || can(r, store.PermLicences) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		writeError(w, http.StatusForbidden, "no_permission", "You don't have permission to do that. Ask one of your global admins.")
+	})
 }
 
 // ── Accounts ─────────────────────────────────────────────────────────────
