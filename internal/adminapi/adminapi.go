@@ -15,6 +15,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"regexp"
 	"slices"
@@ -44,13 +45,15 @@ type API struct {
 	issuer string
 	// SAML sign-in, for SAML apps' IdP details (own_apps.go).
 	saml *samlidp.IdP
+	// Looks up DNS TXT records to verify domains (domains.go); tests replace it.
+	resolver TXTResolver
 }
 
 // New: the organisation and admin parts of Keston ID's API (/v1). The
 // caller comes from principal.Middleware (an access token or Keston ID's
 // session cookie).
 func New(s *store.Store, issuer string) *API {
-	return &API{store: s, issuer: issuer}
+	return &API{store: s, issuer: issuer, resolver: net.DefaultResolver}
 }
 
 func (a *API) Routes() http.Handler {
@@ -100,6 +103,14 @@ func (a *API) Routes() http.Handler {
 		r.Post("/deletion", a.scheduleDeletion)
 		r.Delete("/deletion", a.cancelDeletion)
 		r.Post("/delete-now", a.deleteNow)
+
+		// Its domains (domains.go): Settings, or Keston staff (who alone can add
+		// one without DNS).
+		r.Get("/domains", a.listDomains)
+		r.Post("/domains", a.addDomain)
+		r.Post("/domains/{domainID}/verify", a.verifyDomain)
+		r.Post("/domains/{domainID}/primary", a.makePrimaryDomain)
+		r.Delete("/domains/{domainID}", a.removeDomain)
 
 		// Its users and settings: its global admins, its users whose groups
 		// give them permissions, or Keston support through a support account
@@ -488,6 +499,7 @@ func (a *API) createOrganisation(w http.ResponseWriter, r *http.Request) {
 func (a *API) getOrganisation(w http.ResponseWriter, r *http.Request) {
 	org := organisation(r)
 	perms := permsIn(r, org.ID).List()
+	domains := a.domainNames(r, org)
 	if !a.canManage(r, org.ID) {
 		// Keston staff without support access: the basic details only, no
 		// settings.
@@ -495,17 +507,17 @@ func (a *API) getOrganisation(w http.ResponseWriter, r *http.Request) {
 			basicOrganisation
 			CanManage   bool     `json:"canManage"`
 			Permissions []string `json:"permissions"`
-		}{newBasicOrganisation(org), false, perms})
+		}{newBasicOrganisation(org, domains), false, perms})
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
 		*store.Organisation
-		// Its domains, the primary one first (for now, one).
+		// Its verified domains, the primary one first.
 		Domains   []string `json:"domains"`
 		CanManage bool     `json:"canManage"`
 		// What the caller can do here (see store/permissions.go).
 		Permissions []string `json:"permissions"`
-	}{org, []string{org.Domain}, true, perms})
+	}{org, domains, true, perms})
 }
 
 // basicOrganisation: what Keston staff can see of any organisation without
@@ -524,8 +536,8 @@ type basicOrganisation struct {
 	VerifiedAt          *time.Time `json:"verifiedAt,omitempty"`
 }
 
-func newBasicOrganisation(o *store.Organisation) basicOrganisation {
-	return basicOrganisation{o.ID, o.Name, o.Domain, []string{o.Domain}, o.UserCount, o.CreatedAt,
+func newBasicOrganisation(o *store.Organisation, domains []string) basicOrganisation {
+	return basicOrganisation{o.ID, o.Name, o.Domain, domains, o.UserCount, o.CreatedAt,
 		o.IsPlatform, o.DeletionRequestedAt, o.DeleteAfter, o.Verified, o.VerifiedAt}
 }
 
@@ -666,8 +678,15 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		Licences []string `json:"licences"`
 		// Admin roles (store/roles.go), besides global admin (Role).
 		Roles []string `json:"roles"`
+		// Which of the organisation's verified domains their email has
+		// (default: the primary one).
+		Domain string `json:"domain"`
 	}
 	if !decode(w, r, &body) {
+		return
+	}
+	domain, ok := a.userDomain(w, r, org, body.Domain, "")
+	if !ok {
 		return
 	}
 	if !a.checkProducts(w, r, body.Licences) || !checkRoles(w, r, body.Roles) {
@@ -706,16 +725,16 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	created, err := a.store.CreateUser(r.Context(), a.store.DB, store.NewUser{
-		OrganisationID: org.ID, Email: user + "@" + org.Domain, Name: name, Role: body.Role,
+		OrganisationID: org.ID, Email: user + "@" + domain, Name: name, Role: body.Role,
 		PasswordHash: secret.HashPassword(body.Password), PlatformAdmin: body.PlatformAdmin,
 	})
 	if isUniqueViolation(err) {
-		if existing, _ := a.store.UserByEmail(r.Context(), user+"@"+org.Domain); existing != nil &&
+		if existing, _ := a.store.UserByEmail(r.Context(), user+"@"+domain); existing != nil &&
 			existing.Status == "deleted" {
-			writeFieldError(w, "username", user+"@"+org.Domain+" was deleted recently. Restore them from Deleted users instead.")
+			writeFieldError(w, "username", user+"@"+domain+" was deleted recently. Restore them from Deleted users instead.")
 			return
 		}
-		writeFieldError(w, "username", user+"@"+org.Domain+" already exists.")
+		writeFieldError(w, "username", user+"@"+domain+" already exists.")
 		return
 	}
 	if err != nil {
@@ -1015,7 +1034,10 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name     *string `json:"name"`
 		Username *string `json:"username"`
-		Role     *string `json:"role"`
+		// With Username: one of the organisation's verified domains (default:
+		// their current one).
+		Domain *string `json:"domain"`
+		Role   *string `json:"role"`
 		// TKG Admin on or off (platform admins only, in The Keston Group).
 		PlatformAdmin *bool `json:"platformAdmin"`
 	}
@@ -1037,7 +1059,14 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 			writeFieldError(w, "username", profile.UsernameHelp)
 			return
 		}
-		e := un + "@" + organisation(r).Domain
+		// Keeps their domain unless one of the organisation's verified
+		// domains is asked for.
+		_, current, _ := strings.Cut(u.Email, "@")
+		domain, ok := a.userDomain(w, r, organisation(r), deref(body.Domain), current)
+		if !ok {
+			return
+		}
+		e := un + "@" + domain
 		email = &e
 	}
 	platformBefore := u.PlatformAdmin
