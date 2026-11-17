@@ -540,7 +540,7 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 		case !usernameRE.MatchString(username):
 			res.Reason = usernameHelp
 		case !slices.Contains(domains, domain):
-			res.Reason = domain + " isn't one of your verified domains."
+			res.Reason = domain + " isn't one of your domains."
 		case seen[email]:
 			res.Reason = "The same email is in the list twice."
 		}

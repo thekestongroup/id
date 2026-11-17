@@ -30,7 +30,7 @@ func (brokenDNS) LookupTXT(context.Context, string) ([]string, error) {
 	return nil, &net.DNSError{Err: "server misbehaving", IsTemporary: true}
 }
 
-func uniqueDomain() string { return "d" + strings.ToLower(secret.Token()[:10]) + ".test" }
+func uniqueDomain() string { return "d" + strings.ToLower(secret.Hash(secret.Token())[:10]) + ".test" }
 
 func (e *env) addDomain(as *store.User, org *store.Organisation, domain string, override bool) (int, store.OrgDomain, txtRecord) {
 	e.t.Helper()
