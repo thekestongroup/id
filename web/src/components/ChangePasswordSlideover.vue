@@ -1,12 +1,19 @@
 <script setup lang="ts">
 import { Button, type ButtonStatus, InputPassword, Slideover, useNotifications } from '@thekestongroup/ui'
-import { reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import PasswordRules from './PasswordRules.vue'
 import { api, ApiError } from '../lib/api'
-import { loadMe } from '../lib/session'
+import { ruleMet } from '../lib/passwordRules'
+import { loadMe, me } from '../lib/session'
 
 /** Changing the password, in a Slideover. Signs out every other device. */
 const open = defineModel<boolean>('open', { default: false })
 const { notify } = useNotifications()
+const { t } = useI18n()
+const rules = computed(() => me.value?.security.passwordRules ?? [])
+/** After a try that didn't meet the rules: unmet ones turn red. */
+const tried = ref(false)
 
 const form = reactive({ current: '', next: '', confirm: '' })
 const errors = reactive<{ current?: string; next?: string; confirm?: string }>({})
@@ -18,13 +25,16 @@ watch(open, (isOpen) => {
   Object.assign(form, { current: '', next: '', confirm: '' })
   Object.assign(errors, { current: undefined, next: undefined, confirm: undefined })
   status.value = 'idle'
+  tried.value = false
 })
 
 async function save() {
   errors.current = form.current ? undefined : 'Enter your current password'
-  errors.next = form.next.length >= 12 ? undefined : 'Use at least 12 characters'
-  errors.confirm = form.confirm === form.next ? undefined : "The passwords don't match"
-  if (errors.current || errors.next || errors.confirm) return
+  errors.next = undefined
+  errors.confirm = form.confirm === form.next ? undefined : t('changePassword.mismatch')
+  const met = rules.value.every((r) => ruleMet(r, form.next))
+  tried.value = !met
+  if (errors.current || !met || errors.confirm) return
   status.value = 'loading'
   try {
     await api.changePassword(form.current, form.next)
@@ -52,12 +62,12 @@ async function save() {
         <InputPassword v-model="form.current" label="Current password" autocomplete="current-password" :error-text="errors.current" />
         <InputPassword
           v-model="form.next"
-          label="New password"
-          helper="At least 12 characters. A few random words works well."
+          :label="t('changePassword.newLabel')"
           autocomplete="new-password"
           :error-text="errors.next"
         />
-        <InputPassword v-model="form.confirm" label="New password again" autocomplete="new-password" :error-text="errors.confirm" />
+        <PasswordRules :rules="rules" :password="form.next" :invalid="tried" />
+        <InputPassword v-model="form.confirm" :label="t('changePassword.confirmLabel')" autocomplete="new-password" :error-text="errors.confirm" />
         <!-- Enter in a field submits. -->
         <button type="submit" class="hidden" tabindex="-1" aria-hidden="true" />
       </form>

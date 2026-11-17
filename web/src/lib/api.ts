@@ -34,6 +34,14 @@ export interface UserView {
   avatar?: string
 }
 
+/** One thing a new password must meet (the organisation's policy). `min` is how many; "common" is checked by the server only. */
+export interface PasswordRule {
+  id: 'length' | 'uppercase' | 'lowercase' | 'digits' | 'special' | 'common'
+  label: string
+  baseline: boolean
+  min?: number
+}
+
 /** Things someone must do before they're fully signed in: choose a new password, set up MFA. */
 export type RequiredAction = 'password' | 'mfa'
 
@@ -50,6 +58,8 @@ export interface Flow {
   mfa?: { app: boolean; passkey: boolean }
   /** step 'actions' with MFA: it can be put off ("Not now") until then. */
   mfaGraceUntil?: string
+  /** step 'actions' with a new password: what it must meet. */
+  passwordRules?: PasswordRule[]
 }
 
 /** A passkey or security key on the account. */
@@ -87,6 +97,8 @@ export interface Me {
     passkeys: number
     backupCodesLeft: number
     passwordChangedAt: string
+    /** What a new password must meet (their organisation's policy). */
+    passwordRules?: PasswordRule[]
   }
 }
 
