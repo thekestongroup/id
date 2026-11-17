@@ -36,6 +36,7 @@ const (
 	ActionUserDeleted          = "user.deleted"
 	ActionUserRestored         = "user.restored"
 	ActionUserLicences         = "user.licences_changed"
+	ActionOrgLicences          = "organisation.licences_changed"
 	ActionUserRoles            = "user.roles_changed"
 	ActionPasswordChangeSet    = "user.password_change_required"
 	ActionAccessPassIssued     = "user.access_pass_issued"

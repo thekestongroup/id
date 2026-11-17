@@ -12,9 +12,11 @@ import (
 )
 
 // Product licences (store/licences.go): which of Keston's products each
-// user may use. No seat limits yet.
+// user may use, within the licences the organisation has for each (seats, or
+// unlimited; set by TKG Admins).
 
-// GET …/products: Keston's products, and how many users have each.
+// GET …/products: Keston's products, how many users have each, and the
+// organisation's licences for it (seats, unlimited, available, overAllocated).
 func (a *API) listProducts(w http.ResponseWriter, r *http.Request) {
 	list, err := a.store.Products(r.Context(), organisation(r).ID)
 	if err != nil {
@@ -50,6 +52,9 @@ func (a *API) putLicences(w http.ResponseWriter, r *http.Request) {
 // setLicences sets them and records it, or writes the error.
 func (a *API) setLicences(w http.ResponseWriter, r *http.Request, u *store.User, products []string) bool {
 	err := a.applyLicences(r, u, products)
+	if writeNoSeats(w, err) {
+		return false
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeFieldError(w, "products", "Choose from Keston’s products")
 		return false
@@ -59,6 +64,41 @@ func (a *API) setLicences(w http.ResponseWriter, r *http.Request, u *store.User,
 		return false
 	}
 	return true
+}
+
+// noSeatsMessage: why a licence can't be assigned.
+func noSeatsMessage(e *store.NoSeatsError) string {
+	names := strings.Join(e.Names, ", ")
+	if e.Over {
+		return "This organisation is over its allocation of " + names + " licences. Remove some licences or ask The Keston Group for more."
+	}
+	return "There are no " + names + " licences left. Remove some licences or ask The Keston Group for more."
+}
+
+// writeNoSeats writes the error and returns true if err is a *NoSeatsError.
+func writeNoSeats(w http.ResponseWriter, err error) bool {
+	var e *store.NoSeatsError
+	if !errors.As(err, &e) {
+		return false
+	}
+	writeError(w, http.StatusConflict, "no_licences_left", noSeatsMessage(e))
+	return true
+}
+
+// checkSeats: whether the organisation has licences for one more user to
+// have these products (writing the error if not).
+func (a *API) checkSeats(w http.ResponseWriter, r *http.Request, products []string) bool {
+	if len(products) == 0 {
+		return true
+	}
+	err := a.store.CheckSeats(r.Context(), organisation(r).ID, products, 1)
+	if err == nil {
+		return true
+	}
+	if !writeNoSeats(w, err) {
+		serverError(w, r, err)
+	}
+	return false
 }
 
 // applyLicences sets someone's licences and records the change.
@@ -171,4 +211,89 @@ func (a *API) userApps(w http.ResponseWriter, r *http.Request) {
 		out = append(out, row{c.ID, c.Name, c.Publisher, mode})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// POST …/users/bulk/licences {userIds, add, remove}: gives and takes away
+// licences. Each user is done or skipped with the reason, in order, so when
+// the seats run out the first users are done and the rest skipped ("No
+// Keston Work licences left"). Taking licences away always works.
+func (a *API) bulkLicences(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		UserIDs []string `json:"userIds"`
+		Add     []string `json:"add"`
+		Remove  []string `json:"remove"`
+	}
+	if !decode(w, r, &body) || !checkIDs(w, body.UserIDs) {
+		return
+	}
+	if len(body.Add)+len(body.Remove) == 0 {
+		writeError(w, http.StatusBadRequest, "bad_request", "Choose licences to add or remove.")
+		return
+	}
+	if !a.checkProducts(w, r, append(slices.Clone(body.Add), body.Remove...)) {
+		return
+	}
+	a.runBulk(w, r, body.UserIDs, "licences", false, func(u *store.User, res *bulkResult) (string, error) {
+		have, err := a.store.Licences(r.Context(), u.ID)
+		if err != nil {
+			return "", err
+		}
+		want := slices.Clone(have)
+		for _, p := range body.Add {
+			if !slices.Contains(want, p) {
+				want = append(want, p)
+			}
+		}
+		want = slices.DeleteFunc(want, func(p string) bool { return slices.Contains(body.Remove, p) })
+		err = a.applyLicences(r, u, want)
+		var e *store.NoSeatsError
+		if errors.As(err, &e) {
+			return "No " + strings.Join(e.Names, ", ") + " licences left.", nil
+		}
+		return "", err
+	})
+}
+
+// PUT …/licences {allocations: [{product, seats}]}: how many licences the
+// organisation has for each product (seats null is unlimited). TKG Admins
+// only. Seats below the licences in use are allowed (the organisation is
+// over its allocation until it's under); returns the products as GET …/products.
+func (a *API) putAllocations(w http.ResponseWriter, r *http.Request) {
+	if !caller(r).PlatformAdmin {
+		writeError(w, http.StatusForbidden, "forbidden", "Only TKG Admins can change an organisation's licences.")
+		return
+	}
+	var body struct {
+		Allocations []struct {
+			Product string `json:"product"`
+			Seats   *int   `json:"seats"`
+		} `json:"allocations"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	seats := map[string]*int{}
+	for _, al := range body.Allocations {
+		if al.Seats != nil && (*al.Seats < 0 || *al.Seats > 1_000_000) {
+			writeFieldError(w, "seats", "Enter a number of seats from 0 to 1,000,000, or choose unlimited.")
+			return
+		}
+		seats[al.Product] = al.Seats
+	}
+	me := caller(r).ID
+	org := organisation(r)
+	summary, err := a.store.SetAllocations(r.Context(), org.ID, &me, seats)
+	if errors.Is(err, store.ErrNotFound) {
+		writeFieldError(w, "product", "Choose from Keston’s products")
+		return
+	}
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if summary != "" {
+		slog.Info("licence allocations changed", "organisation", org.ID, "by", me)
+		a.audit(r, store.ActionOrgLicences, aboutOrg(org), summary)
+	}
+	a.listProducts(w, r)
 }
