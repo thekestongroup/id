@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -206,31 +207,86 @@ func (s *Store) CancelDeletion(ctx context.Context, orgID string) (bool, error) 
 	return tag.RowsAffected() == 1, err
 }
 
-// DeleteDueOrganisations deletes organisations whose 14 days are up: their
-// users (and so their sessions, tokens and grants) first, then the rest.
+// deleteOrganisations permanently deletes these organisations in tx: their
+// users first (and so their sessions, tokens and grants), then the
+// organisations, whose own rows (groups, apps, logs, support records…) go by
+// cascade. Both housekeeping and "delete now" use it.
+func deleteOrganisations(ctx context.Context, tx pgx.Tx, ids []string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE organisation_id = ANY($1::uuid[])`, ids); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `DELETE FROM organisations WHERE id = ANY($1::uuid[]) AND NOT is_platform`, ids)
+	return err
+}
+
+// DeleteDueOrganisations deletes organisations whose 14 days are up.
 func (s *Store) DeleteDueOrganisations(ctx context.Context) ([]string, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `SELECT name FROM organisations
+	rows, err := tx.Query(ctx, `SELECT id::text, name FROM organisations
 		WHERE delete_after <= now() AND NOT is_platform FOR UPDATE SKIP LOCKED`)
 	if err != nil {
 		return nil, err
 	}
-	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil || len(names) == 0 {
+	type due struct{ ID, Name string }
+	found, err := pgx.CollectRows(rows, pgx.RowToStructByPos[due])
+	if err != nil || len(found) == 0 {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE organisation_id IN
-		(SELECT id FROM organisations WHERE delete_after <= now() AND NOT is_platform)`); err != nil {
-		return nil, err
+	ids := make([]string, len(found))
+	names := make([]string, len(found))
+	for i, d := range found {
+		ids[i], names[i] = d.ID, d.Name
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM organisations WHERE delete_after <= now() AND NOT is_platform`); err != nil {
+	if err := deleteOrganisations(ctx, tx, ids); err != nil {
 		return nil, err
 	}
 	return names, tx.Commit(ctx)
+}
+
+// Why DeleteOrganisationNow refused.
+var (
+	ErrNotScheduled = errors.New("organisation isn't scheduled for deletion")
+	ErrIsPlatform   = errors.New("the platform organisation can't be deleted")
+)
+
+// DeleteOrganisationNow deletes an organisation that is already scheduled
+// for deletion, without waiting out the rest of DeletionWait, in one
+// transaction with the same cleanup as DeleteDueOrganisations. It writes an
+// audit entry in the platform organisation's log (the organisation's own
+// log goes with it). It returns the organisation as it was.
+func (s *Store) DeleteOrganisationNow(ctx context.Context, orgID string, by *User, ip string) (*Organisation, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	org, err := scanOrganisation(tx.QueryRow(ctx, `SELECT `+orgColumns+` FROM organisations WHERE id = $1 FOR UPDATE`, orgID))
+	if err != nil {
+		return nil, err
+	}
+	if org.IsPlatform {
+		return nil, ErrIsPlatform
+	}
+	if org.DeleteAfter == nil {
+		return nil, ErrNotScheduled
+	}
+	var platformID string
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM organisations WHERE is_platform`).Scan(&platformID); err != nil {
+		return nil, err
+	}
+	if err := deleteOrganisations(ctx, tx, []string{org.ID}); err != nil {
+		return nil, err
+	}
+	if err := auditIn(ctx, tx, AuditEntry{OrganisationID: platformID, Actor: by, Action: ActionOrganisationDeletedNow,
+		TargetType: TargetOrganisation, TargetID: org.ID, TargetName: org.Name, IP: ip,
+		Summary: "Domain: " + org.Domain + "; was due for deletion on " + org.DeleteAfter.UTC().Format("2 January 2006")}); err != nil {
+		return nil, err
+	}
+	return org, tx.Commit(ctx)
 }
 
 func (s *Store) SetUsernameFormat(ctx context.Context, orgID, format string) error {

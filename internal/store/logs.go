@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ── Logs: admin actions and sign-ins ─────────────────────────────────────
@@ -66,6 +67,8 @@ const (
 	ActionDeletionCancelled    = "deletion.cancelled"
 	ActionOrganisationVerified = "organisation.verified"
 	ActionPlatformSettings     = "platform_settings.changed"
+	// Recorded in the platform organisation's log: the organisation's own goes with it.
+	ActionOrganisationDeletedNow = "organisation.deleted_now"
 )
 
 // What an action was done to.
@@ -91,6 +94,16 @@ type AuditEntry struct {
 
 // Audit records an admin action.
 func (s *Store) Audit(ctx context.Context, e AuditEntry) {
+	if err := auditIn(context.WithoutCancel(ctx), s.DB, e); err != nil {
+		slog.Warn("audit log", "action", e.Action, "organisation", e.OrganisationID, "error", err)
+	}
+}
+
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func auditIn(ctx context.Context, q execer, e AuditEntry) error {
 	var actorID, staffID *string
 	actorName, actorEmail := "Keston ID", ""
 	if e.Actor != nil {
@@ -98,14 +111,12 @@ func (s *Store) Audit(ctx context.Context, e AuditEntry) {
 	}
 	// The staff member's name comes from the same statement (a support
 	// account only knows their ID).
-	_, err := s.DB.Exec(context.WithoutCancel(ctx), `INSERT INTO audit_log (organisation_id, actor_id, actor_name,
+	_, err := q.Exec(ctx, `INSERT INTO audit_log (organisation_id, actor_id, actor_name,
 			actor_email, support_staff_id, support_staff_name, action, target_type, target_id, target_name, summary, ip)
 		VALUES ($1, $2, $3, $4, $5::uuid, (SELECT name FROM users WHERE id = $5::uuid), $6, $7, NULLIF($8, ''), $9, $10, $11)`,
 		e.OrganisationID, actorID, actorName, actorEmail, staffID, e.Action, e.TargetType, e.TargetID,
 		clip(e.TargetName, 200), clip(e.Summary, 1000), clip(e.IP, 64))
-	if err != nil {
-		slog.Warn("audit log", "action", e.Action, "organisation", e.OrganisationID, "error", err)
-	}
+	return err
 }
 
 // Sign-in methods.

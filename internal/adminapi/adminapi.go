@@ -84,6 +84,7 @@ func (a *API) Routes() http.Handler {
 		r.Post("/verify", a.verifyOrganisation)
 		r.Post("/deletion", a.scheduleDeletion)
 		r.Delete("/deletion", a.cancelDeletion)
+		r.Post("/delete-now", a.deleteNow)
 
 		// Its users and settings: its global admins, its users whose groups
 		// give them permissions, or Keston support through a support account
