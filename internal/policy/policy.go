@@ -52,14 +52,18 @@ type Policy struct {
 }
 
 // Normalise keeps a policy within sensible bounds: never below the
-// baseline, no negative counts, banned passwords lowercase and unique.
+// baseline, no negative counts, banned passwords lowercase and unique. The
+// minimum length is also raised to what the required kinds of character add
+// up to (2 capitals + 2 numbers can't be met in fewer than 4 characters), so
+// the length shown to people is the real shortest password.
 func (p Policy) Normalise() Policy {
 	clamp := func(n, hi int) int { return min(max(n, 0), hi) }
-	p.MinLength = min(max(p.MinLength, BaselineMinLength), 128)
 	p.MinUppercase = clamp(p.MinUppercase, 32)
 	p.MinLowercase = clamp(p.MinLowercase, 32)
 	p.MinDigits = clamp(p.MinDigits, 32)
 	p.MinSpecial = clamp(p.MinSpecial, 32)
+	required := p.MinUppercase + p.MinLowercase + p.MinDigits + p.MinSpecial
+	p.MinLength = min(max(p.MinLength, BaselineMinLength, required), 128)
 	blocked := []string{}
 	for _, b := range p.Blocked {
 		b = strings.ToLower(strings.TrimSpace(b))
