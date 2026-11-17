@@ -80,6 +80,10 @@ const (
 	ActionGuestRemoved         = "guest.removed"
 	ActionGuestLeft            = "guest.left"
 	ActionGuestRoles           = "guest.roles_changed"
+	ActionDomainAdded          = "domain.added"
+	ActionDomainVerified       = "domain.verified"
+	ActionDomainPrimary        = "domain.primary_changed"
+	ActionDomainRemoved        = "domain.removed"
 	ActionMoveRequested        = "move.requested"
 	ActionMoveAccepted         = "move.accepted"
 	ActionMoveDeclined         = "move.declined"
@@ -201,7 +205,7 @@ func (s *Store) LogSignIn(ctx context.Context, e SignIn) {
 	}
 	_, err := s.DB.Exec(context.WithoutCancel(ctx), `INSERT INTO sign_in_log (organisation_id, user_id, user_name, email,
 			method, client_id, success, reason, support_staff_id, support_staff_name, ip, user_agent)
-		VALUES (COALESCE($1::uuid, (SELECT id FROM organisations WHERE lower(domain) = split_part($4, '@', 2))),
+		VALUES (COALESCE($1::uuid, (SELECT organisation_id FROM organisation_domains WHERE lower(domain) = lower(split_part($4, '@', 2)))),
 			$2, $3, $4, $5, COALESCE(NULLIF($6, ''), (SELECT client_id FROM auth_requests WHERE id = $7::uuid)),
 			$8, $9, $10, $11, $12, $13)`,
 		orgID, userID, name, email, e.Method, e.ClientID, authReq, e.Success, e.Reason, staffID, staffName,

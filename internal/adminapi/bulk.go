@@ -516,7 +516,11 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	domains := orgDomains(org)
+	domains, err := a.store.VerifiedDomains(ctx, org.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	mustChange := body.RequirePasswordChange == nil || *body.RequirePasswordChange
 	results := make([]bulkResult, len(body.Users))
 	seen := map[string]bool{}
@@ -536,7 +540,7 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 		case !usernameRE.MatchString(username):
 			res.Reason = usernameHelp
 		case !slices.Contains(domains, domain):
-			res.Reason = domain + " isn't one of your domains."
+			res.Reason = domain + " isn't one of your verified domains."
 		case seen[email]:
 			res.Reason = "The same email is in the list twice."
 		}
@@ -609,6 +613,3 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 	slog.Info("bulk create", "organisation", org.ID, "done", done, "requested", len(body.Users), "by", caller(r).ID)
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
-
-// orgDomains: the domains an organisation's users can have (one, for now).
-func orgDomains(org *store.Organisation) []string { return []string{strings.ToLower(org.Domain)} }
