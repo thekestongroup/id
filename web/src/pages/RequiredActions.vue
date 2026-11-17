@@ -10,10 +10,13 @@ import {
   Spinner,
 } from '@thekestongroup/ui'
 import { computed, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import PasswordRules from '../components/PasswordRules.vue'
 import FlowState from '../components/FlowState.vue'
 import KestonIdPage from '../components/KestonIdPage.vue'
 import { api, ApiError, type Flow } from '../lib/api'
+import { ruleMet } from '../lib/passwordRules'
 import { signOut } from '../lib/session'
 import { useFlow } from '../lib/useFlow'
 
@@ -24,6 +27,7 @@ import { useFlow } from '../lib/useFlow'
  * One at a time; the server says what's left.
  */
 const router = useRouter()
+const { t } = useI18n()
 const { authRequestID, client, flow, error: flowError, loading, next } = useFlow('actions')
 const action = computed(() => flow.value?.actions?.[0])
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -39,12 +43,17 @@ async function done(f: Flow) {
 const pw = reactive({ next: '', confirm: '' })
 const pwErrors = reactive<{ next?: string; confirm?: string; form?: string }>({})
 const pwStatus = ref<ButtonStatus>('idle')
+const rules = computed(() => flow.value?.passwordRules ?? [])
+/** Set after a try that didn't meet the rules: unmet ones turn red. */
+const pwTried = ref(false)
 
 async function savePassword() {
-  pwErrors.next = pw.next.length >= 12 ? undefined : 'Use at least 12 characters'
-  pwErrors.confirm = pw.confirm === pw.next ? undefined : "The passwords don't match"
+  pwErrors.next = undefined
+  pwErrors.confirm = pw.confirm === pw.next ? undefined : t('requiredPassword.mismatch')
   pwErrors.form = undefined
-  if (pwErrors.next || pwErrors.confirm) return
+  const met = rules.value.every((r) => ruleMet(r, pw.next))
+  pwTried.value = !met
+  if (!met || pwErrors.confirm) return
   pwStatus.value = 'loading'
   try {
     const f = await api.requiredPassword(pw.next, authRequestID.value)
@@ -130,27 +139,26 @@ async function enable(value = code.value) {
       <Card v-if="action === 'password'">
         <div class="flex flex-col gap-6">
           <div class="flex flex-col gap-1">
-            <h1 tabindex="-1" class="text-xl font-bold outline-none">Choose a new password</h1>
-            <p class="text-sm text-black/65">
-              Your organisation has asked you to choose a new password before you continue.
-            </p>
+            <h1 tabindex="-1" class="text-xl font-bold outline-none">{{ t('requiredPassword.title') }}</h1>
+            <p class="text-sm text-black/65">{{ t('requiredPassword.intro') }}</p>
           </div>
           <form class="flex flex-col gap-4" novalidate @submit.prevent="savePassword">
             <InputPassword
               v-model="pw.next"
-              label="New password"
-              helper="At least 12 characters, different from your old one. A few random words works well."
+              :label="t('requiredPassword.newLabel')"
               autocomplete="new-password"
               :error-text="pwErrors.next"
             />
+            <PasswordRules :rules="rules" :password="pw.next" :invalid="pwTried" />
+            <p class="-mt-2 text-sm text-black/65">{{ t('passwordRules.different') }}</p>
             <InputPassword
               v-model="pw.confirm"
-              label="New password again"
+              :label="t('requiredPassword.confirmLabel')"
               autocomplete="new-password"
               :error-text="pwErrors.confirm"
             />
             <p v-if="pwErrors.form" class="text-sm text-red" role="alert">{{ pwErrors.form }}</p>
-            <Button type="submit" variant="primary" :status="pwStatus" loading-text="Saving">Continue</Button>
+            <Button type="submit" variant="primary" :status="pwStatus" :loading-text="t('requiredPassword.saving')">{{ t('requiredPassword.continue') }}</Button>
           </form>
         </div>
       </Card>

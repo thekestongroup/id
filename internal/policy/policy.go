@@ -81,6 +81,9 @@ type Rule struct {
 	Label string `json:"label"`
 	// Baseline rules can't be turned off by an organisation.
 	Baseline bool `json:"baseline"`
+	// Min is how many it asks for (characters, capitals, numbers…), so a
+	// client can check as someone types. Zero for "common".
+	Min int `json:"min,omitempty"`
 }
 
 func plural(n int, one, many string) string {
@@ -93,18 +96,18 @@ func plural(n int, one, many string) string {
 // Rules lists what a password must meet, in the order to show them.
 func (p Policy) Rules() []Rule {
 	p = p.Normalise()
-	rules := []Rule{{ID: "length", Label: fmt.Sprintf("At least %d characters", p.MinLength), Baseline: p.MinLength == BaselineMinLength}}
+	rules := []Rule{{ID: "length", Label: fmt.Sprintf("At least %d characters", p.MinLength), Baseline: p.MinLength == BaselineMinLength, Min: p.MinLength}}
 	if p.MinUppercase > 0 {
-		rules = append(rules, Rule{ID: "uppercase", Label: "At least " + plural(p.MinUppercase, "capital letter", "capital letters")})
+		rules = append(rules, Rule{ID: "uppercase", Label: "At least " + plural(p.MinUppercase, "capital letter", "capital letters"), Min: p.MinUppercase})
 	}
 	if p.MinLowercase > 0 {
-		rules = append(rules, Rule{ID: "lowercase", Label: "At least " + plural(p.MinLowercase, "lowercase letter", "lowercase letters")})
+		rules = append(rules, Rule{ID: "lowercase", Label: "At least " + plural(p.MinLowercase, "lowercase letter", "lowercase letters"), Min: p.MinLowercase})
 	}
 	if p.MinDigits > 0 {
-		rules = append(rules, Rule{ID: "digits", Label: "At least " + plural(p.MinDigits, "number", "numbers")})
+		rules = append(rules, Rule{ID: "digits", Label: "At least " + plural(p.MinDigits, "number", "numbers"), Min: p.MinDigits})
 	}
 	if p.MinSpecial > 0 {
-		rules = append(rules, Rule{ID: "special", Label: "At least " + plural(p.MinSpecial, "special character", "special characters") + ", like ! ? # or %"})
+		rules = append(rules, Rule{ID: "special", Label: "At least " + plural(p.MinSpecial, "special character", "special characters") + ", like ! ? # or %", Min: p.MinSpecial})
 	}
 	rules = append(rules, Rule{ID: "common", Label: "Not a commonly used password", Baseline: true})
 	return rules

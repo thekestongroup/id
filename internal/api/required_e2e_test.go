@@ -23,6 +23,7 @@ import (
 
 	"github.com/thekestongroup/id/internal/config"
 	"github.com/thekestongroup/id/internal/db"
+	"github.com/thekestongroup/id/internal/policy"
 	"github.com/thekestongroup/id/internal/principal"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
@@ -126,7 +127,8 @@ type flowOut struct {
 	Field    string   `json:"field"`
 	Message  string   `json:"message"`
 	// Setting up MFA can be put off until then.
-	MFAGraceUntil *time.Time `json:"mfaGraceUntil"`
+	MFAGraceUntil *time.Time    `json:"mfaGraceUntil"`
+	PasswordRules []policy.Rule `json:"passwordRules"`
 }
 
 func (b *browser) signIn(email, password string, authRequestID string) flowOut {
@@ -548,5 +550,33 @@ func TestMFARulesByAppAndAddress(t *testing.T) {
 	_, _ = e.st.SaveMFARule(ctx, e.orgID, rules[1])
 	if st, _ := e.st.SignInState(ctx, u, store.SignInContext{IP: "203.0.113.9", ClientID: "payroll"}); st.MFARequired {
 		t.Error("a disabled rule still applied")
+	}
+}
+
+func TestRequiredPasswordFlowCarriesOrgRules(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	u := e.user("rae")
+	if err := e.st.SetPasswordPolicy(ctx, e.orgID, policy.Policy{MinLength: 10, MinDigits: 1}); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.st.SetPasswordChangeRequired(ctx, u.ID, true)
+	b := e.browser()
+	f := b.signIn(u.Email, goodPassword, "")
+	wantActions(t, f, ActionPassword)
+	want := policy.Policy{MinLength: 10, MinDigits: 1}.Rules()
+	if len(f.PasswordRules) != len(want) || f.PasswordRules[0].Min != 10 || f.PasswordRules[1].ID != "digits" || f.PasswordRules[1].Min != 1 {
+		t.Fatalf("rules %+v, want %+v", f.PasswordRules, want)
+	}
+	// The flow page loads the same rules.
+	var again flowOut
+	if code := b.do("GET", "/flow", nil, &again); code != 200 || len(again.PasswordRules) != len(want) {
+		t.Fatalf("flow: %d %+v", code, again)
+	}
+	// No password action: no rules.
+	u2 := e.user("sam")
+	_ = e.st.SetMFARequired(ctx, e.orgID, true)
+	if f2 := e.browser().signIn(u2.Email, goodPassword, ""); len(f2.PasswordRules) != 0 {
+		t.Fatalf("rules without a password action: %+v", f2)
 	}
 }

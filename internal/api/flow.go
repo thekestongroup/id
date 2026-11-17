@@ -10,6 +10,7 @@ import (
 
 	"github.com/pquerna/otp/totp"
 
+	"github.com/thekestongroup/id/internal/policy"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 )
@@ -30,6 +31,10 @@ type flowResponse struct {
 	Actions []string `json:"actions,omitempty"`
 	// Setting up MFA can be put off ("Not now") until then.
 	MFAGraceUntil *time.Time `json:"mfaGraceUntil,omitempty"`
+	// step "actions" with "password": what the new password must meet (the
+	// organisation's policy), for the page to check as they type. The server
+	// still checks it.
+	PasswordRules []policy.Rule `json:"passwordRules,omitempty"`
 	// At the MFA step: the ways this account can do it.
 	MFA *mfaMethods `json:"mfa,omitempty"`
 }
@@ -68,6 +73,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		case len(actions) > 0:
 			res.Step, res.Actions = "actions", actions
 			res.MFAGraceUntil = a.graceFor(ctx, cur, actions)
+			res.PasswordRules = a.rulesFor(ctx, cur, actions)
 		default:
 			res.Step = "account"
 		}
@@ -126,6 +132,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		}
 		res.Step, res.Actions = "actions", actions
 		res.MFAGraceUntil = a.graceFor(ctx, cur, actions)
+		res.PasswordRules = a.rulesFor(ctx, cur, actions)
 		return res, 0, ""
 	}
 	// Another organisation's own app: only its users can sign in to it.
@@ -443,6 +450,14 @@ func (a *API) consent(w http.ResponseWriter, r *http.Request) {
 }
 
 var _ = store.ErrNotFound
+
+// rulesFor: the organisation's password rules, when a new password is among the actions.
+func (a *API) rulesFor(ctx context.Context, cur *current, actions []string) []policy.Rule {
+	if !slices.Contains(actions, ActionPassword) {
+		return nil
+	}
+	return a.store.PolicyFor(ctx, cur.user.OrganisationID).Rules()
+}
 
 // graceFor: when MFA is among the actions and can still be put off, until when.
 func (a *API) graceFor(ctx context.Context, cur *current, actions []string) *time.Time {
