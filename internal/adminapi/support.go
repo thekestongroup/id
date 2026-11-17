@@ -404,3 +404,32 @@ func (a *API) cancelDeletion(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// POST …/delete-now: TKG Admins only, and only for an organisation already
+// scheduled for deletion. Deletes it at once, skipping the rest of the wait
+// (same cleanup as housekeeping). Recorded in the platform organisation's
+// audit log, since the organisation's own goes with it.
+func (a *API) deleteNow(w http.ResponseWriter, r *http.Request) {
+	u := caller(r)
+	org := organisation(r)
+	if !u.PlatformAdmin {
+		writeError(w, http.StatusForbidden, "forbidden", "Only The Keston Group can delete an organisation immediately.")
+		return
+	}
+	deleted, err := a.store.DeleteOrganisationNow(r.Context(), org.ID, u, clientIP(r))
+	switch {
+	case errors.Is(err, store.ErrIsPlatform):
+		writeError(w, http.StatusConflict, "platform", "The Keston Group's organisation can't be deleted.")
+		return
+	case errors.Is(err, store.ErrNotScheduled):
+		writeError(w, http.StatusConflict, "not_scheduled",
+			org.Name+" isn't scheduled for deletion. A global admin has to schedule it first.")
+		return
+	case err != nil:
+		serverError(w, r, err)
+		return
+	}
+	slog.Warn("organisation deleted immediately", "organisation", deleted.ID, "name", deleted.Name,
+		"domain", deleted.Domain, "wasDueAt", deleted.DeleteAfter, "by", u.ID)
+	w.WriteHeader(http.StatusNoContent)
+}
