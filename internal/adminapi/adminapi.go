@@ -69,6 +69,16 @@ func (a *API) Routes() http.Handler {
 	r.Post("/notifications/read", a.readNotifications)
 	r.Delete("/notifications", a.clearNotifications)
 
+	// Guests and account moves, for the person themselves (same for Keston
+	// Admin and Keston ID's account pages; see guests.go).
+	r.Get("/my-organisations", a.myOrganisations)
+	r.Get("/guest-invitations", a.guestInvitations)
+	r.Post("/guest-invitations/{id}/{decision:accept|decline}", a.respondToInvitation)
+	r.Get("/guest-memberships", a.guestMemberships)
+	r.Post("/guest-memberships/{id}/leave", a.leaveGuest)
+	r.Get("/prompts", a.prompts)
+	r.Post("/prompts/seen", a.promptSeen)
+
 	r.Route("/organisations/{orgID}", func(r chi.Router) {
 		// Seeing it: platform admins (Keston staff), and its own users who
 		// have any permission in Keston Admin.
@@ -94,6 +104,16 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermViewUsers)).Get("/users", a.listUsers)
 		r.With(a.need(store.PermCreateUsers)).Post("/users", a.createUser)
 		r.With(a.need(store.PermViewUsers)).Get("/users/{userID}", a.getUser)
+		// Guests (guests.go) and moving accounts between organisations (moves.go).
+		r.With(a.need(store.PermViewUsers)).Get("/guests", a.listGuests)
+		r.With(a.need(store.PermCreateUsers)).Post("/guests", a.inviteGuest)
+		r.With(a.need(store.PermDeleteUsers)).Delete("/guests/{guestID}", a.removeGuest)
+		r.With(a.need(store.PermAssign)).Put("/guests/{guestID}/roles", a.putGuestRoles)
+		r.With(a.need(store.PermPolicy)).Get("/guest-settings", a.getGuestSettings)
+		r.With(a.need(store.PermPolicy)).Put("/guest-settings", a.putGuestSettings)
+		r.With(a.need(store.PermViewUsers)).Get("/moves", a.listMoves)
+		r.Post("/users/{userID}/move", a.requestMove)
+		r.Post("/moves/{moveID}/{decision:accept|decline|cancel}", a.decideMove)
 		r.With(a.need(store.PermEditUsers)).Patch("/users/{userID}", a.updateUser)
 		r.With(a.need(store.PermEditUsers)).Put("/users/{userID}/picture", a.setUserPicture)
 		r.With(a.need(store.PermEditUsers)).Delete("/users/{userID}/picture", a.removeUserPicture)
@@ -206,8 +226,23 @@ func (a *API) canManage(r *http.Request, orgID string) bool { return len(permsIn
 func (a *API) requireView(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "orgID")
-		u := caller(r)
-		if !u.PlatformAdmin && !(u.OrganisationID == id && len(callerPerms(r)) > 0) {
+		c := principal.From(r.Context())
+		u := c.User
+		// An accepted guest here (their home organisation allows it): a
+		// member of this organisation for what follows, with what its
+		// groups and roles give them. Never for sign-in or tokens.
+		var guestPerms store.Perms
+		if u.OrganisationID != id {
+			perms, err := a.store.PermissionsIn(r.Context(), u, id)
+			if err != nil {
+				serverError(w, r, err)
+				return
+			}
+			if len(perms) > 0 {
+				guestPerms = perms
+			}
+		}
+		if guestPerms == nil && !u.PlatformAdmin && !(u.OrganisationID == id && len(c.Perms) > 0) {
 			writeError(w, http.StatusNotFound, "not_found", "That organisation doesn't exist.")
 			return
 		}
@@ -216,7 +251,11 @@ func (a *API) requireView(next http.Handler) http.Handler {
 			writeError(w, http.StatusNotFound, "not_found", "That organisation doesn't exist.")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), orgKey, org)))
+		ctx := context.WithValue(r.Context(), orgKey, org)
+		if guestPerms != nil {
+			ctx = principal.With(ctx, guestCaller(c, org, guestPerms))
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -245,10 +284,11 @@ func (a *API) canChange(r *http.Request, u *store.User) (bool, error) {
 	if caller(r).Role == "global_admin" {
 		return true, nil
 	}
-	if u.Role == "global_admin" {
+	// A guest here is a member here, whatever they are at home.
+	if u.Role == "global_admin" && u.OrganisationID == organisation(r).ID {
 		return false, nil
 	}
-	theirs, err := a.store.PermissionsOf(r.Context(), u)
+	theirs, err := a.store.PermissionsIn(r.Context(), u, organisation(r).ID)
 	if err != nil {
 		return false, err
 	}

@@ -119,7 +119,7 @@ func (s *Store) SAMLRequest(ctx context.Context, authRequestID string) (string, 
 // GroupNamesForUser: the names of the groups someone is in.
 func (s *Store) GroupNamesForUser(ctx context.Context, userID string) ([]string, error) {
 	rows, err := s.DB.Query(ctx, `SELECT g.name FROM groups g JOIN group_members m ON m.group_id = g.id
-		WHERE m.user_id = $1 ORDER BY lower(g.name)`, userID)
+		WHERE m.user_id = $1 AND g.organisation_id = (SELECT organisation_id FROM users WHERE id = $1) ORDER BY lower(g.name)`, userID)
 	if err != nil {
 		return nil, err
 	}

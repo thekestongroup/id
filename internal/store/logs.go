@@ -73,6 +73,17 @@ const (
 	ActionDeletionCancelled    = "deletion.cancelled"
 	ActionOrganisationVerified = "organisation.verified"
 	ActionPlatformSettings     = "platform_settings.changed"
+	ActionGuestSetting         = "guests.setting_changed"
+	ActionGuestInvited         = "guest.invited"
+	ActionGuestAccepted        = "guest.accepted"
+	ActionGuestDeclined        = "guest.declined"
+	ActionGuestRemoved         = "guest.removed"
+	ActionGuestLeft            = "guest.left"
+	ActionGuestRoles           = "guest.roles_changed"
+	ActionMoveRequested        = "move.requested"
+	ActionMoveAccepted         = "move.accepted"
+	ActionMoveDeclined         = "move.declined"
+	ActionMoveCancelled        = "move.cancelled"
 	// Recorded in the platform organisation's log: the organisation's own goes with it.
 	ActionOrganisationDeletedNow = "organisation.deleted_now"
 )

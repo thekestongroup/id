@@ -178,9 +178,12 @@ func (s *Store) RemoveGroupMember(ctx context.Context, groupID, userID string) e
 	return err
 }
 
-// GroupIDsForUser: the groups someone is in.
+// GroupIDsForUser: the groups someone is in, in their home organisation (a
+// guest's groups in other organisations never count for their own).
 func (s *Store) GroupIDsForUser(ctx context.Context, userID string) ([]string, error) {
-	rows, err := s.DB.Query(ctx, `SELECT group_id::text FROM group_members WHERE user_id = $1`, userID)
+	rows, err := s.DB.Query(ctx, `SELECT m.group_id::text FROM group_members m
+		JOIN groups g ON g.id = m.group_id JOIN users u ON u.id = m.user_id
+		WHERE m.user_id = $1 AND g.organisation_id = u.organisation_id`, userID)
 	if err != nil {
 		return nil, err
 	}

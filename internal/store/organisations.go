@@ -31,18 +31,20 @@ type Organisation struct {
 	// can't sign in. Always set for the platform organisation.
 	Verified   bool       `json:"verified"`
 	VerifiedAt *time.Time `json:"verifiedAt,omitempty"`
+	// Its people may be guests in other organisations (Security).
+	AllowGuests bool `json:"allowGuests"`
 }
 
 const orgColumns = `id, name, domain, password_policy, profile_editing,
 	(SELECT count(*) FROM users u WHERE u.organisation_id = organisations.id AND u.support_for IS NULL
 		AND u.status <> 'deleted'), created_at,
-	is_platform, deletion_requested_at, delete_after, username_format, verified_at`
+	is_platform, deletion_requested_at, delete_after, username_format, verified_at, allow_guests`
 
 func scanOrganisation(row pgx.Row) (*Organisation, error) {
 	var o Organisation
 	var raw, editing []byte
 	if err := row.Scan(&o.ID, &o.Name, &o.Domain, &raw, &editing, &o.UserCount, &o.CreatedAt, &o.IsPlatform,
-		&o.DeletionRequestedAt, &o.DeleteAfter, &o.UsernameFormat, &o.VerifiedAt); err != nil {
+		&o.DeletionRequestedAt, &o.DeleteAfter, &o.UsernameFormat, &o.VerifiedAt, &o.AllowGuests); err != nil {
 		return nil, notFound(err)
 	}
 	if err := json.Unmarshal(raw, &o.PasswordPolicy); err != nil {

@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Pencil } from '@lucide/vue'
 import EditProfileSlideover from '../../components/EditProfileSlideover.vue'
+import GuestOrganisationsCard from '../../components/GuestOrganisationsCard.vue'
 import { api, type SessionInfo } from '../../lib/api'
 import { me, signOut } from '../../lib/session'
 
@@ -75,6 +76,8 @@ async function end(s: SessionInfo) {
   </Card>
 
   <EditProfileSlideover v-model:open="editing" />
+
+  <GuestOrganisationsCard />
 
   <Card title="Where you're signed in" description="Sign out anywhere you don't recognise, then change your password.">
     <div v-if="!sessions" class="flex justify-center py-4"><Spinner label="Loading" /></div>
