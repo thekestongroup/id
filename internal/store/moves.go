@@ -107,7 +107,7 @@ func (s *Store) movable(ctx context.Context, q pgx.Tx, u *User) error {
 
 func emailIn(u *User, to *Organisation) string {
 	local, _, _ := strings.Cut(u.Email, "@")
-	return local + "@" + to.Domain
+	return local + "@" + to.Domain // its primary domain
 }
 
 // RequestMove asks to move u to the organisation (ErrPending if one is

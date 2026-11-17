@@ -57,6 +57,11 @@ const (
 	ActionGroupPermissions     = "group.permissions_changed"
 	ActionGroupLicences        = "group.licences_changed"
 	ActionAppAccess            = "app.access_changed"
+	ActionAppRequested         = "app_request.created"
+	ActionAppRequestCancelled  = "app_request.cancelled"
+	ActionAppRequestApproved   = "app_request.approved"
+	ActionAppRequestDeclined   = "app_request.declined"
+	ActionAppRequestSettings   = "app_request.settings_changed"
 	ActionKestonAppCreated     = "keston_app.created"
 	ActionKestonAppUpdated     = "keston_app.updated"
 	ActionKestonAppRetired     = "keston_app.retired"
@@ -77,6 +82,14 @@ const (
 	ActionDeletionCancelled    = "deletion.cancelled"
 	ActionOrganisationVerified = "organisation.verified"
 	ActionPlatformSettings     = "platform_settings.changed"
+	ActionMessagePosted        = "message.posted"
+	ActionMessageUpdated       = "message.updated"
+	ActionMessageDeleted       = "message.deleted"
+	ActionIncidentOpened       = "incident.opened"
+	ActionIncidentUpdated      = "incident.updated"
+	ActionMaintenanceScheduled = "maintenance.scheduled"
+	ActionMaintenanceUpdated   = "maintenance.updated"
+	ActionMaintenanceCancelled = "maintenance.cancelled"
 	ActionGuestSetting         = "guests.setting_changed"
 	ActionGuestInvited         = "guest.invited"
 	ActionGuestAccepted        = "guest.accepted"
@@ -84,6 +97,10 @@ const (
 	ActionGuestRemoved         = "guest.removed"
 	ActionGuestLeft            = "guest.left"
 	ActionGuestRoles           = "guest.roles_changed"
+	ActionDomainAdded          = "domain.added"
+	ActionDomainVerified       = "domain.verified"
+	ActionDomainPrimary        = "domain.primary_changed"
+	ActionDomainRemoved        = "domain.removed"
 	ActionMoveRequested        = "move.requested"
 	ActionMoveAccepted         = "move.accepted"
 	ActionMoveDeclined         = "move.declined"
@@ -98,6 +115,9 @@ const (
 	TargetGroup        = "group"
 	TargetApp          = "app"
 	TargetOrganisation = "organisation"
+	TargetMessage      = "message"
+	TargetIncident     = "incident"
+	TargetMaintenance  = "maintenance"
 )
 
 // AuditEntry is one admin action.
@@ -207,7 +227,7 @@ func (s *Store) LogSignIn(ctx context.Context, e SignIn) {
 	}
 	_, err := s.DB.Exec(context.WithoutCancel(ctx), `INSERT INTO sign_in_log (organisation_id, user_id, user_name, email,
 			method, client_id, success, reason, support_staff_id, support_staff_name, ip, user_agent)
-		VALUES (COALESCE($1::uuid, (SELECT id FROM organisations WHERE lower(domain) = split_part($4, '@', 2))),
+		VALUES (COALESCE($1::uuid, (SELECT organisation_id FROM organisation_domains WHERE lower(domain) = lower(split_part($4, '@', 2)))),
 			$2, $3, $4, $5, COALESCE(NULLIF($6, ''), (SELECT client_id FROM auth_requests WHERE id = $7::uuid)),
 			$8, $9, $10, $11, $12, $13)`,
 		orgID, userID, name, email, e.Method, e.ClientID, authReq, e.Success, e.Reason, staffID, staffName,

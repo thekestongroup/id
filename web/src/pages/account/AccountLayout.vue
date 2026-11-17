@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AppWindow, House, ShieldCheck } from '@lucide/vue'
+import { AppWindow, House, PackagePlus, ShieldCheck } from '@lucide/vue'
 import {
   AppShell,
   NotificationPane,
@@ -38,7 +38,12 @@ function toInput(n: Notification) {
     createdAt: new Date(n.createdAt),
     read: !!n.readAt,
     // An invitation is answered in the pop-up.
-    action: n.link === '/invitations' ? { label: t('guests.notifications.open'), onSelect: () => (showInvitations.value = true) } : undefined,
+    action:
+      n.link === '/invitations'
+        ? { label: t('guests.notifications.open'), onSelect: () => (showInvitations.value = true) }
+        : n.link === '/account/requests'
+          ? { label: t('appRequests.notificationOpen'), onSelect: () => router.push('/account/requests') }
+          : undefined,
   }
 }
 async function loadNotifications() {
@@ -78,6 +83,7 @@ const nav = computed<SidebarSection[]>(() => [
       { label: 'Overview', icon: House, to: '/account' },
       { label: 'Security', icon: ShieldCheck, to: '/account/security' },
       { label: 'Connected apps', icon: AppWindow, to: '/account/apps' },
+      { label: t('appRequests.nav'), icon: PackagePlus, to: '/account/requests' },
     ].map((item) => ({ ...item, active: route.path === item.to })),
   },
 ])

@@ -12,7 +12,7 @@ import { useFlow } from '../lib/useFlow'
  * Signing in with a temporary access pass from an admin (e.g. after losing
  * a phone), instead of a password and MFA. They then set up MFA again.
  */
-const { authRequestID, client, error: flowError, loading, next } = useFlow('sign-in')
+const { authRequestID, client, error: flowError, refused, loading, next } = useFlow('sign-in')
 
 const form = reactive({ email: '', code: '' })
 const errors = reactive<{ email?: string; code?: string; form?: string }>({})
@@ -38,7 +38,7 @@ async function signIn() {
 
 <template>
   <KestonIdPage :brand="client ? 'tkg' : 'kestonId'">
-    <FlowState :loading="loading" :error="flowError">
+    <FlowState :loading="loading" :error="flowError" :refused="refused">
       <Card>
         <div class="flex flex-col gap-6">
           <div class="flex flex-col gap-1">

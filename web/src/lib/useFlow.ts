@@ -14,6 +14,8 @@ export function useFlow(page: Flow['step']) {
   const authRequestID = computed(() => (route.query.authRequestID as string | undefined) || undefined)
   const flow = ref<Flow>()
   const error = ref<string>()
+  /** Sign-in to the app was refused, but they may ask for it. */
+  const refused = ref<{ clientId: string; clientName: string; pending: boolean }>()
   const loading = ref(true)
 
   onMounted(async () => {
@@ -27,6 +29,9 @@ export function useFlow(page: Flow['step']) {
       }
     } catch (e) {
       error.value = e instanceof ApiError ? e.message : 'Something went wrong. Try again.'
+      if (e instanceof ApiError && e.code === 'app_refused' && e.data?.canRequest) {
+        refused.value = { clientId: String(e.data.clientId), clientName: String(e.data.clientName), pending: !!e.data.pending }
+      }
     } finally {
       loading.value = false
     }
@@ -35,5 +40,5 @@ export function useFlow(page: Flow['step']) {
   /** After a step succeeds: on to the next one. */
   const next = (f: Flow) => follow(router, f, authRequestID.value)
 
-  return { authRequestID, flow, client: computed(() => flow.value?.client), error, loading, next }
+  return { authRequestID, flow, client: computed(() => flow.value?.client), error, refused, loading, next }
 }

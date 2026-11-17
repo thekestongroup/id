@@ -433,7 +433,9 @@ func (a *API) updateProfile(w http.ResponseWriter, r *http.Request) {
 			writeFieldError(w, "username", profile.UsernameHelp)
 			return
 		}
-		e := u + "@" + org.Domain
+		// Their own domain (an organisation can have several).
+		_, domain, _ := strings.Cut(cur.user.Email, "@")
+		e := u + "@" + domain
 		email = &e
 	}
 	// Work details: only the ones the organisation lets people change.

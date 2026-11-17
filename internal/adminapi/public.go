@@ -24,6 +24,8 @@ func (a *API) PublicRoutes() http.Handler {
 	r.Use(noStore)
 	checks := newLimiter(60, time.Minute) // as you type in the wizard
 	creates := newLimiter(5, time.Hour)
+	status := newLimiter(60, time.Minute)
+	r.With(status.middleware).Get("/status", a.publicStatus)
 	r.With(checks.middleware).Get("/domains/{domain}", a.domainAvailable)
 	r.With(checks.middleware).Post("/password-check", a.publicPasswordCheck)
 	r.With(creates.middleware).Post("/organisations", a.signUp)

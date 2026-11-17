@@ -135,6 +135,19 @@ export interface ConnectedApp {
   grantedAt?: string
 }
 
+export interface AppRequest {
+  id: string
+  clientId: string
+  appName: string
+  reason: string
+  status: 'pending' | 'approved' | 'declined' | 'cancelled'
+  decisionMessage: string
+  decidedByName: string
+  decidedAt?: string
+  seen: boolean
+  createdAt: string
+}
+
 export interface SessionInfo {
   id: string
   userAgent: string
@@ -190,12 +203,15 @@ export class ApiError extends Error {
   readonly code: string
   /** The form field the error belongs to, if any. */
   readonly field?: string
+  /** The rest of the response, e.g. which app a sign-in refusal is about. */
+  readonly data?: Record<string, unknown>
 
-  constructor(status: number, code: string, message: string, field?: string) {
+  constructor(status: number, code: string, message: string, field?: string, data?: Record<string, unknown>) {
     super(message)
     this.status = status
     this.code = code
     this.field = field
+    this.data = data
   }
 }
 
@@ -219,7 +235,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (res.status === 204) return undefined as T
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    throw new ApiError(res.status, data.error ?? 'error', data.message ?? 'Something went wrong. Try again.', data.field)
+    throw new ApiError(res.status, data.error ?? 'error', data.message ?? 'Something went wrong. Try again.', data.field, data)
   }
   return data as T
 }
@@ -279,6 +295,11 @@ export const api = {
   },
   apps: () => request<ConnectedApp[]>('GET', '/v1/me/apps'),
   revokeApp: (clientId: string) => request<void>('DELETE', `/v1/me/apps/${encodeURIComponent(clientId)}`, {}),
+  requestableApps: () => request<ClientView[]>('GET', '/v1/me/requestable-apps'),
+  appRequests: () => request<AppRequest[]>('GET', '/v1/me/app-requests'),
+  requestApp: (clientId: string, reason: string) => request<AppRequest>('POST', '/v1/me/app-requests', { clientId, reason }),
+  cancelAppRequest: (id: string) => request<void>('DELETE', `/v1/me/app-requests/${encodeURIComponent(id)}`, {}),
+  appRequestsSeen: () => request<void>('POST', '/v1/me/app-requests/seen', {}),
   sessions: () => request<SessionInfo[]>('GET', '/v1/me/sessions'),
   endSession: (id: string) => request<void>('DELETE', `/v1/me/sessions/${encodeURIComponent(id)}`, {}),
   changePassword: (current: string, next: string) => request<void>('POST', '/v1/me/password', { current, new: next }),

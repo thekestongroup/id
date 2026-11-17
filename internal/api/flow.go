@@ -222,6 +222,9 @@ func (a *API) denyURL(id, reason string) string {
 func (a *API) respondNext(w http.ResponseWriter, r *http.Request, cur *current, authRequestID string) {
 	res, status, msg := a.next(r, cur, authRequestID)
 	if res == nil {
+		if status == http.StatusForbidden && cur != nil && a.writeAppRefused(w, r, cur, authRequestID, msg) {
+			return
+		}
 		writeError(w, status, "flow_error", msg)
 		return
 	}

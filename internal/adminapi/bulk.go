@@ -525,7 +525,11 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	domains := orgDomains(org)
+	domains, err := a.store.VerifiedDomains(ctx, org.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	defs, err := a.store.AttributeDefs(ctx, org.ID)
 	if err != nil {
 		serverError(w, r, err)
@@ -640,6 +644,3 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 	slog.Info("bulk create", "organisation", org.ID, "done", done, "requested", len(body.Users), "by", caller(r).ID)
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
-
-// orgDomains: the domains an organisation's users can have (one, for now).
-func orgDomains(org *store.Organisation) []string { return []string{strings.ToLower(org.Domain)} }

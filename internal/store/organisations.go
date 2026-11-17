@@ -76,14 +76,17 @@ func (s *Store) OrganisationByID(ctx context.Context, id string) (*Organisation,
 	return scanOrganisation(s.DB.QueryRow(ctx, `SELECT `+orgColumns+` FROM organisations WHERE id = $1`, id))
 }
 
+// OrganisationByDomain: the organisation with this verified domain, primary
+// or not.
 func (s *Store) OrganisationByDomain(ctx context.Context, domain string) (*Organisation, error) {
 	return scanOrganisation(s.DB.QueryRow(ctx, `SELECT `+orgColumns+` FROM organisations
-		WHERE lower(domain) = lower($1)`, domain))
+		WHERE id = (SELECT organisation_id FROM organisation_domains WHERE lower(domain) = lower($1)
+			AND status = 'verified')`, domain))
 }
 
 func (s *Store) DomainTaken(ctx context.Context, domain string) (bool, error) {
 	var taken bool
-	err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM organisations WHERE lower(domain) = lower($1))`,
+	err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM organisation_domains WHERE lower(domain) = lower($1))`,
 		domain).Scan(&taken)
 	return taken, err
 }
@@ -108,6 +111,9 @@ func (s *Store) CreateOrganisationWith(ctx context.Context, name, domain string,
 	if err := tx.QueryRow(ctx, `INSERT INTO organisations (name, domain, verified_at)
 		VALUES ($1, lower($2), CASE WHEN $3 THEN now() END) RETURNING id`,
 		name, domain, verified).Scan(&orgID); err != nil {
+		return nil, nil, err
+	}
+	if err := insertPrimaryDomain(ctx, tx, orgID, domain); err != nil {
 		return nil, nil, err
 	}
 	admin.OrganisationID = orgID
@@ -197,19 +203,52 @@ func (s *Store) SetProfileEditing(ctx context.Context, orgID string, p ProfileEd
 // exists (there must always be one): marks the organisation with this
 // domain, or creates it (with no users yet).
 func (s *Store) EnsurePlatformOrganisation(ctx context.Context, name, domain string) (*Organisation, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
 	var id string
-	// Already there: keep its name and domain in line with the config.
-	err := s.DB.QueryRow(ctx, `UPDATE organisations SET name = $1, domain = lower($2) WHERE is_platform
+	// Already there: keep its name and primary domain in line with the config.
+	err = tx.QueryRow(ctx, `UPDATE organisations SET name = $1, domain = lower($2) WHERE is_platform
 		RETURNING id`, name, domain).Scan(&id)
 	if err == nil {
-		return s.OrganisationByID(ctx, id)
+		if err := setPrimaryTo(ctx, tx, id, domain); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := tx.QueryRow(ctx, `INSERT INTO organisations (name, domain, is_platform, verified_at) VALUES ($1, lower($2), TRUE, now())
+			ON CONFLICT (lower(domain)) DO UPDATE SET is_platform = TRUE,
+				verified_at = coalesce(organisations.verified_at, now()) RETURNING id`, name, domain).Scan(&id); err != nil {
+			return nil, err
+		}
+		if err := setPrimaryTo(ctx, tx, id, domain); err != nil {
+			return nil, err
+		}
 	}
-	if err := s.DB.QueryRow(ctx, `INSERT INTO organisations (name, domain, is_platform, verified_at) VALUES ($1, lower($2), TRUE, now())
-		ON CONFLICT (lower(domain)) DO UPDATE SET is_platform = TRUE,
-			verified_at = coalesce(organisations.verified_at, now()) RETURNING id`, name, domain).Scan(&id); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return s.OrganisationByID(ctx, id)
+}
+
+// setPrimaryTo makes domain the organisation's verified primary domain,
+// adding it if it's new (used when the platform's configured domain
+// changes).
+func setPrimaryTo(ctx context.Context, tx pgx.Tx, orgID, domain string) error {
+	if _, err := tx.Exec(ctx, `UPDATE organisation_domains SET is_primary = FALSE
+		WHERE organisation_id = $1 AND is_primary AND lower(domain) <> lower($2)`, orgID, domain); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE organisation_domains SET is_primary = TRUE, status = 'verified',
+		verified_at = coalesce(verified_at, now()) WHERE organisation_id = $1 AND lower(domain) = lower($2)`, orgID, domain)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return insertPrimaryDomain(ctx, tx, orgID, domain)
+	}
+	return nil
 }
 
 // ── Deleting an organisation ─────────────────────────────────────────────

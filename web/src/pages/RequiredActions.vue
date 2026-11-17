@@ -28,7 +28,7 @@ import { useFlow } from '../lib/useFlow'
  */
 const router = useRouter()
 const { t } = useI18n()
-const { authRequestID, client, flow, error: flowError, loading, next } = useFlow('actions')
+const { authRequestID, client, flow, error: flowError, refused, loading, next } = useFlow('actions')
 const action = computed(() => flow.value?.actions?.[0])
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -134,7 +134,7 @@ async function enable(value = code.value) {
 
 <template>
   <KestonIdPage :brand="client ? 'tkg' : 'kestonId'">
-    <FlowState :loading="loading" :error="flowError">
+    <FlowState :loading="loading" :error="flowError" :refused="refused">
       <!-- Choose a new password. -->
       <Card v-if="action === 'password'">
         <div class="flex flex-col gap-6">

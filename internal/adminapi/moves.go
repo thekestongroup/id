@@ -67,7 +67,7 @@ func (a *API) requestMove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "last_admin", u.Name+" is your only global admin. Make someone else a global admin first.")
 		return
 	case errors.Is(err, store.ErrMoveEmailTaken):
-		writeFieldError(w, "domain", "Someone at "+to.Name+" already has the email "+strings.Replace(u.Email, "@"+organisation(r).Domain, "@"+to.Domain, 1)+".")
+		writeFieldError(w, "domain", "Someone at "+to.Name+" already has the email "+emailInOrg(u.Email, to.Domain)+".")
 		return
 	case errors.Is(err, store.ErrPending):
 		writeError(w, http.StatusConflict, "pending", "There's already a request to move "+u.Name+".")
@@ -158,4 +158,10 @@ func (a *API) decideMove(w http.ResponseWriter, r *http.Request) {
 			m.ToOrganisationName+" declined to take "+m.UserName+".", "/organisations/"+m.FromOrganisationID+"/users")
 	}
 	writeJSON(w, http.StatusOK, m)
+}
+
+// emailInOrg: the same username at another domain.
+func emailInOrg(email, domain string) string {
+	local, _, _ := strings.Cut(email, "@")
+	return local + "@" + domain
 }
