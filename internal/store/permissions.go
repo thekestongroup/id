@@ -120,12 +120,9 @@ func (s *Store) PermissionsOf(ctx context.Context, u *User) (Perms, error) {
 		}
 		return out, nil
 	}
-	rows, err := s.DB.Query(ctx, `SELECT DISTINCT p.permission FROM group_permissions p
-		JOIN group_members m ON m.group_id = p.group_id WHERE m.user_id = $1`, u.ID)
-	if err != nil {
-		return nil, err
-	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	// Only their own organisation's groups: a guest's groups elsewhere give
+	// nothing here (see PermissionsIn for that organisation).
+	ids, err := s.groupPermissions(ctx, u.ID, u.OrganisationID)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +137,18 @@ func (s *Store) PermissionsOf(ctx context.Context, u *User) (Perms, error) {
 		out[id] = true
 	}
 	return out, nil
+}
+
+// groupPermissions: what someone's groups in this organisation give them.
+func (s *Store) groupPermissions(ctx context.Context, userID, orgID string) ([]string, error) {
+	rows, err := s.DB.Query(ctx, `SELECT DISTINCT p.permission FROM group_permissions p
+		JOIN group_members m ON m.group_id = p.group_id
+		JOIN groups g ON g.id = p.group_id
+		WHERE m.user_id = $1 AND g.organisation_id = $2`, userID, orgID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
 // SetGroupPermissions replaces a group's permissions.

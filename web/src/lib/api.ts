@@ -133,6 +133,35 @@ export interface SignedInAccount {
   needsMfa: boolean
 }
 
+/** A guest membership: an invitation to be a guest in another organisation, or a guest there. */
+export interface Guest {
+  id: string
+  organisationId: string
+  organisationName: string
+  organisationDomain: string
+  homeOrganisationName: string
+  /** pending (an invitation), accepted… */
+  status: string
+  invitedByName: string
+  createdAt: string
+  /** Their organisation allows guests now; if not, it's on hold. */
+  active: boolean
+}
+
+export interface Prompts {
+  guestInvitations: (Guest & { popup: boolean })[]
+}
+
+export interface Notification {
+  id: string
+  type: 'info' | 'success' | 'warning' | 'error'
+  title: string
+  body: string
+  link: string
+  readAt?: string
+  createdAt: string
+}
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
@@ -173,6 +202,15 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
+  prompts: () => request<Prompts>('GET', '/v1/prompts'),
+  promptSeen: (id: string) => request<void>('POST', '/v1/prompts/seen', { kind: 'guest_invitation', id }),
+  respondToInvitation: (id: string, accept: boolean) =>
+    request<Guest>('POST', `/v1/guest-invitations/${encodeURIComponent(id)}/${accept ? 'accept' : 'decline'}`, {}),
+  guestMemberships: () => request<Guest[]>('GET', '/v1/guest-memberships'),
+  leaveGuest: (id: string) => request<void>('POST', `/v1/guest-memberships/${encodeURIComponent(id)}/leave`, {}),
+  notifications: () => request<Notification[]>('GET', '/v1/notifications'),
+  readNotifications: () => request<void>('POST', '/v1/notifications/read', {}),
+  clearNotifications: () => request<void>('DELETE', '/v1/notifications', {}),
   flow: (authRequestID?: string) =>
     request<Flow>('GET', `/api/flow${authRequestID ? `?authRequestID=${encodeURIComponent(authRequestID)}` : ''}`),
   signIn: (email: string, password: string, authRequestID?: string) =>

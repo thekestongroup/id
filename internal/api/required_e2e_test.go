@@ -21,6 +21,7 @@ import (
 
 	"github.com/pquerna/otp/totp"
 
+	"github.com/thekestongroup/id/internal/adminapi"
 	"github.com/thekestongroup/id/internal/config"
 	"github.com/thekestongroup/id/internal/db"
 	"github.com/thekestongroup/id/internal/policy"
@@ -61,6 +62,8 @@ func setup(t *testing.T) *env {
 	mux.Handle("/api/", http.StripPrefix("/api", a.Routes()))
 	// /v1/me as server.go mounts it (cookie callers only here).
 	mux.Handle("/v1/me/", http.StripPrefix("/v1/me", principal.Middleware(st, nil, a.CookieSession)(a.MeRoutes())))
+	// The rest of /v1 (guest invitations, prompts…) for cookie callers.
+	mux.Handle("/v1/", http.StripPrefix("/v1", principal.Middleware(st, nil, a.CookieSession)(adminapi.New(st, cfg.Issuer).Routes())))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 

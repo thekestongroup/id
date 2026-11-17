@@ -192,7 +192,10 @@ func (a *API) deleteGroup(w http.ResponseWriter, r *http.Request) {
 // change.
 func (a *API) member(w http.ResponseWriter, r *http.Request) *store.User {
 	u, err := a.store.UserByID(r.Context(), chi.URLParam(r, "userID"))
-	if err != nil || u.OrganisationID != organisation(r).ID || u.IsSupport() || u.Status == "deleted" {
+	// Their own people, or accepted guests (groups are the one thing a guest
+	// organisation sets for them besides roles).
+	if err != nil || u.IsSupport() || u.Status == "deleted" ||
+		(u.OrganisationID != organisation(r).ID && !a.store.IsGuestIn(r.Context(), u.ID, organisation(r).ID)) {
 		writeError(w, http.StatusNotFound, "not_found", "That user doesn't exist.")
 		return nil
 	}
