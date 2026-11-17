@@ -275,8 +275,8 @@ func validDomain(d string) bool { return len(d) <= 253 && domainRE.MatchString(d
 
 func normaliseUsername(u string) string { return strings.ToLower(strings.TrimSpace(u)) }
 
-const domainHelp = "Enter a domain like greenfield.sch.uk, without https:// or www."
-const usernameHelp = "Use lowercase letters, numbers, dots, dashes or underscores, like j.smith"
+const domainHelp = "Enter a domain like example.com, without https:// or www."
+const usernameHelp = "Use lowercase letters, numbers, dots, dashes or underscores, like john.doe"
 
 // ── Handlers: you and the rules ──────────────────────────────────────────
 

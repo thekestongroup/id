@@ -253,7 +253,7 @@ func readPassword() (string, error) {
 func createOrg(ctx context.Context, st *store.Store, args []string) error {
 	fs := flag.NewFlagSet("orgs create", flag.ContinueOnError)
 	name := fs.String("name", "", "organisation name")
-	domain := fs.String("domain", "", "its domain, e.g. greenfield.sch.uk")
+	domain := fs.String("domain", "", "its domain, e.g. example.com")
 	adminUser := fs.String("admin-username", "", "first global admin's username (before the @)")
 	adminName := fs.String("admin-name", "", "first global admin's full name")
 	platform := fs.Bool("platform-admin", false, "make the global admin a platform admin too (The Keston Group)")

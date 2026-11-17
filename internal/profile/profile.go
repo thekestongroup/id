@@ -19,7 +19,7 @@ import (
 
 var usernameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$`)
 
-const UsernameHelp = "Use lowercase letters, numbers, dots, dashes or underscores, like j.smith"
+const UsernameHelp = "Use lowercase letters, numbers, dots, dashes or underscores, like john.doe"
 
 func NormaliseUsername(u string) string { return strings.ToLower(strings.TrimSpace(u)) }
 

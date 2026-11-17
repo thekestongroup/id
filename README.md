@@ -115,7 +115,7 @@ passwords into chat or scripts.
 For local testing only (never create it on the live server):
 
 ```bash
-docker compose run --rm -e KESTON_ID_PASSWORD="correct horse battery" keston-id users create -email ben.smith@keston.school -name "Ben Smith" -organisation "The Keston School"
+docker compose run --rm -e KESTON_ID_PASSWORD="correct horse battery" keston-id users create -email john.doe@example.com -name "John Doe" -organisation "Example Ltd"
 ```
 
 It signs in with that email and password, and has MFA

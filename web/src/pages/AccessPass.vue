@@ -44,7 +44,7 @@ async function signIn() {
           <div class="flex flex-col gap-1">
             <h1 tabindex="-1" class="text-xl font-bold outline-none">Sign in with an access pass</h1>
             <p class="text-sm text-black/65">
-              Use the access pass your school or organisation's IT team gave you. Next, you'll set up MFA again.
+              Use the access pass your organisation's IT team gave you. Next, you'll set up MFA again.
             </p>
           </div>
           <form class="flex flex-col gap-4" novalidate @submit.prevent="signIn">
