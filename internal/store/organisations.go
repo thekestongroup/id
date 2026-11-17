@@ -156,6 +156,30 @@ type ProfileEditing struct {
 	Name    bool `json:"name"`
 	Email   bool `json:"email"`
 	Picture bool `json:"picture"`
+	// Work details. Employee ID, manager and start date are only ever set by admins.
+	JobTitle   bool `json:"jobTitle"`
+	Department bool `json:"department"`
+	Office     bool `json:"office"`
+	Phone      bool `json:"phone"`
+	Mobile     bool `json:"mobile"`
+}
+
+// Allows says whether people may change this built-in profile field (by its
+// JSON name, see profile.FieldKeys) themselves.
+func (p ProfileEditing) Allows(field string) bool {
+	switch field {
+	case "jobTitle":
+		return p.JobTitle
+	case "department":
+		return p.Department
+	case "office":
+		return p.Office
+	case "phone":
+		return p.Phone
+	case "mobile":
+		return p.Mobile
+	}
+	return false
 }
 
 func (s *Store) SetProfileEditing(ctx context.Context, orgID string, p ProfileEditing) error {

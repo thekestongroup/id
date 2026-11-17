@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/thekestongroup/id/internal/policy"
+	"github.com/thekestongroup/id/internal/profile"
 	"github.com/thekestongroup/id/internal/secret"
 	"github.com/thekestongroup/id/internal/store"
 )
@@ -489,6 +491,9 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 			Name     string `json:"name"`
 			Username string `json:"username"`
 			Domain   string `json:"domain"`
+			// Built-in profile fields, "managerEmail" (an email or username) and
+			// "attributes" by key (see putUserProfile).
+			Profile map[string]json.RawMessage `json:"profile"`
 		} `json:"users"`
 		Password              string   `json:"password"`
 		Licences              []string `json:"licences"`
@@ -517,6 +522,11 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	domains := orgDomains(org)
+	defs, err := a.store.AttributeDefs(ctx, org.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	mustChange := body.RequirePasswordChange == nil || *body.RequirePasswordChange
 	results := make([]bulkResult, len(body.Users))
 	seen := map[string]bool{}
@@ -541,6 +551,18 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 			res.Reason = "The same email is in the list twice."
 		}
 		seen[email] = true
+		var prof *parsedProfile
+		if res.Reason == "" && len(in.Profile) > 0 {
+			var err error
+			if prof, err = a.parseProfile(r, org, defs, profile.Fields{}, in.Profile); err != nil {
+				var fe *profile.FieldError
+				if !errors.As(err, &fe) {
+					serverError(w, r, err)
+					return
+				}
+				res.Reason = fe.Message + " (" + strings.TrimPrefix(fe.Field, "attributes.") + ")"
+			}
+		}
 		if res.Reason != "" {
 			results[i] = res
 			continue
@@ -587,7 +609,12 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		a.audit(r, store.ActionUserCreated, aboutUser(created), "Role: Member (added with others)")
+		if err := a.saveNewProfile(r, created, prof); err != nil {
+			serverError(w, r, err)
+			return
+		}
+		a.audit(r, store.ActionUserCreated, aboutUser(created), summary("Role: Member (added with others)",
+			a.profileSummary(r, org.ID, defs, prof)))
 		if len(body.Licences) > 0 {
 			err := a.applyLicences(r, created, body.Licences)
 			var noSeats *store.NoSeatsError

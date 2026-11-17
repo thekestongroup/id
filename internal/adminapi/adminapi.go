@@ -115,6 +115,12 @@ func (a *API) Routes() http.Handler {
 		r.Post("/users/{userID}/move", a.requestMove)
 		r.Post("/moves/{moveID}/{decision:accept|decline|cancel}", a.decideMove)
 		r.With(a.need(store.PermEditUsers)).Patch("/users/{userID}", a.updateUser)
+		r.With(a.need(store.PermEditUsers)).Put("/users/{userID}/profile", a.putUserProfile)
+		// Custom user attributes (Settings → User attributes).
+		r.With(a.need(store.PermViewUsers)).Get("/user-attributes", a.listAttributes)
+		r.With(a.need(store.PermSettings)).Post("/user-attributes", a.createAttribute)
+		r.With(a.need(store.PermSettings)).Put("/user-attributes/{attributeID}", a.updateAttribute)
+		r.With(a.need(store.PermSettings)).Delete("/user-attributes/{attributeID}", a.deleteAttribute)
 		r.With(a.need(store.PermEditUsers)).Put("/users/{userID}/picture", a.setUserPicture)
 		r.With(a.need(store.PermEditUsers)).Delete("/users/{userID}/picture", a.removeUserPicture)
 		r.With(a.need(store.PermResetPassword)).Post("/users/{userID}/reset-password", a.resetPassword)
@@ -647,12 +653,28 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		Licences []string `json:"licences"`
 		// Admin roles (store/roles.go), besides global admin (Role).
 		Roles []string `json:"roles"`
+		// Built-in profile fields and "attributes" (see putUserProfile).
+		Profile map[string]json.RawMessage `json:"profile"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	if !a.checkProducts(w, r, body.Licences) || !checkRoles(w, r, body.Roles) {
 		return
+	}
+	defs, err := a.store.AttributeDefs(r.Context(), org.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	var prof *parsedProfile
+	if len(body.Profile) > 0 {
+		if prof, err = a.parseProfile(r, org, defs, profile.Fields{}, body.Profile); err != nil {
+			if !profileProblem(w, err) {
+				serverError(w, r, err)
+			}
+			return
+		}
 	}
 	if !a.checkSeats(w, r, body.Licences) {
 		return
@@ -710,7 +732,12 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	slog.Info("account created", "user", created.ID, "organisation", org.ID, "by", caller(r).ID)
-	a.audit(r, store.ActionUserCreated, aboutUser(created), "Role: "+roleLabel(created.Role)+platformSuffix(created.PlatformAdmin))
+	if err := a.saveNewProfile(r, created, prof); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	a.audit(r, store.ActionUserCreated, aboutUser(created), summary("Role: "+roleLabel(created.Role)+platformSuffix(created.PlatformAdmin),
+		a.profileSummary(r, org.ID, defs, prof)))
 	if len(body.Licences) > 0 && !a.setLicences(w, r, created, body.Licences) {
 		return
 	}
@@ -933,6 +960,16 @@ func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	prof, err := a.fullProfile(r, u)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	reports, err := a.reportsOf(r, u)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, struct {
 		userJSON
 		Groups      []store.Group `json:"groups"`
@@ -940,7 +977,9 @@ func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
 		CanChange   bool          `json:"canChange"`
 		Licences    []string      `json:"licences"`
 		Roles       []string      `json:"roles"`
-	}{a.withPasskeyCount(r, a.userView(u)), groups, perms.List(), canChange && !u.IsSupport(), licences, roles})
+		Profile     profileJSON   `json:"profile"`
+		Reports     []personRef   `json:"reports"`
+	}{a.withPasskeyCount(r, a.userView(u)), groups, perms.List(), canChange && !u.IsSupport(), licences, roles, prof, reports})
 }
 
 // PATCH …/users/{id} {name?, username?, role?}: admins can always change
@@ -1124,7 +1163,12 @@ func (a *API) putSettings(w http.ResponseWriter, r *http.Request) {
 		changes = append(changes,
 			change("Change their name", onOff(old.Name), onOff(editing.Name)),
 			change("Change their email", onOff(old.Email), onOff(editing.Email)),
-			change("Change their picture", onOff(old.Picture), onOff(editing.Picture)))
+			change("Change their picture", onOff(old.Picture), onOff(editing.Picture)),
+			change("Change their job title", onOff(old.JobTitle), onOff(editing.JobTitle)),
+			change("Change their department", onOff(old.Department), onOff(editing.Department)),
+			change("Change their office", onOff(old.Office), onOff(editing.Office)),
+			change("Change their phone number", onOff(old.Phone), onOff(editing.Phone)),
+			change("Change their mobile number", onOff(old.Mobile), onOff(editing.Mobile)))
 	}
 	format := org.UsernameFormat
 	if body.UsernameFormat != nil {

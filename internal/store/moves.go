@@ -229,6 +229,9 @@ func (s *Store) DecideMove(ctx context.Context, id, toOrgID string, accept bool,
 		// Nothing from the old organisation carries over.
 		{`DELETE FROM user_roles WHERE user_id = $1`, []any{userID}},
 		{`DELETE FROM user_licences WHERE user_id = $1`, []any{userID}},
+		// Their manager, their reports' manager link to them, and organisation-defined attributes.
+		{`UPDATE user_profiles SET manager_id = NULL, updated_at = now() WHERE user_id = $1 OR manager_id = $1`, []any{userID}},
+		{`DELETE FROM user_attribute_values WHERE user_id = $1`, []any{userID}},
 		{`DELETE FROM group_members WHERE user_id = $1 AND group_id IN (SELECT id FROM groups WHERE organisation_id = $2)`,
 			[]any{userID, fromID}},
 		// Now a member of the new organisation, so no longer its guest.
