@@ -553,6 +553,19 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 			results[i] = res
 			continue
 		}
+		if len(body.Licences) > 0 {
+			var noSeats *store.NoSeatsError
+			err := a.store.CheckSeats(ctx, org.ID, body.Licences, 1)
+			if errors.As(err, &noSeats) {
+				res.Reason = "No " + strings.Join(noSeats.Names, ", ") + " licences left."
+				results[i] = res
+				continue
+			}
+			if err != nil {
+				serverError(w, r, err)
+				return
+			}
+		}
 		created, err := a.store.CreateUser(ctx, a.store.DB, store.NewUser{
 			OrganisationID: org.ID, Email: email, Name: name, Role: "member", PasswordHash: secret.HashPassword(pw),
 		})
@@ -576,7 +589,12 @@ func (a *API) bulkCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		a.audit(r, store.ActionUserCreated, aboutUser(created), "Role: Member (added with others)")
 		if len(body.Licences) > 0 {
-			if err := a.applyLicences(r, created, body.Licences); err != nil {
+			err := a.applyLicences(r, created, body.Licences)
+			var noSeats *store.NoSeatsError
+			if errors.As(err, &noSeats) {
+				// Someone took the last seat meanwhile: added, but without it.
+				res.Reason = "Added without a licence: no " + strings.Join(noSeats.Names, ", ") + " licences left."
+			} else if err != nil {
 				serverError(w, r, err)
 				return
 			}
