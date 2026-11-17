@@ -368,6 +368,18 @@ func (a *API) getGuestSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"allowGuests": organisation(r).AllowGuests})
 }
 
+// applyAllowGuests turns guests on or off and records it. The guest settings
+// and the security defaults share it.
+func (a *API) applyAllowGuests(r *http.Request, on bool) error {
+	org := organisation(r)
+	if err := a.store.SetAllowGuests(r.Context(), org.ID, on); err != nil {
+		return err
+	}
+	a.audit(r, store.ActionGuestSetting, aboutOrg(org),
+		change("Allow users to be guests in other organisations", onOff(org.AllowGuests), onOff(on)))
+	return nil
+}
+
 // PUT …/guest-settings {allowGuests}: whether this organisation's people can
 // be guests in other organisations. Turning it off puts every guest
 // membership of its people on hold (they come back if it's turned on
@@ -384,12 +396,9 @@ func (a *API) putGuestSettings(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "allowGuests", "Choose on or off")
 		return
 	}
-	org := organisation(r)
-	if err := a.store.SetAllowGuests(r.Context(), org.ID, *body.AllowGuests); err != nil {
+	if err := a.applyAllowGuests(r, *body.AllowGuests); err != nil {
 		serverError(w, r, err)
 		return
 	}
-	a.audit(r, store.ActionGuestSetting, aboutOrg(org),
-		change("Allow users to be guests in other organisations", onOff(org.AllowGuests), onOff(*body.AllowGuests)))
 	writeJSON(w, http.StatusOK, map[string]any{"allowGuests": *body.AllowGuests})
 }

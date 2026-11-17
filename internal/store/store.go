@@ -203,15 +203,25 @@ func (s *Store) SetPlatformAdmin(ctx context.Context, email string, on bool) err
 }
 
 // RecordLogin counts failed attempts; five in a row lock the account for 15
-// minutes, which slows password guessing across every replica.
+// minutes, which slows password guessing across every replica. Locking an
+// account raises a security alert.
 func (s *Store) RecordLogin(ctx context.Context, userID string, ok bool) error {
 	if ok {
 		_, err := s.DB.Exec(ctx, `UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1`, userID)
 		return err
 	}
-	_, err := s.DB.Exec(ctx, `UPDATE users SET failed_logins = failed_logins + 1,
+	var orgID, name, email string
+	var failed int
+	err := s.DB.QueryRow(ctx, `UPDATE users SET failed_logins = failed_logins + 1,
 		locked_until = CASE WHEN failed_logins + 1 >= 5 THEN now() + interval '15 minutes' ELSE locked_until END
-		WHERE id = $1`, userID)
+		WHERE id = $1 RETURNING organisation_id, name, email, failed_logins`, userID).Scan(&orgID, &name, &email, &failed)
+	if err == nil && failed == 5 {
+		s.RaiseAlert(ctx, NewAlert{OrganisationID: orgID, Kind: AlertAccountLocked, Severity: AlertSeverityWarning,
+			SubjectID: userID, SubjectName: name,
+			Title:     name + "'s account was locked",
+			Body:      name + " (" + email + ") was locked for 15 minutes after 5 failed sign-ins in a row.",
+			DedupeFor: 15 * time.Minute})
+	}
 	return err
 }
 

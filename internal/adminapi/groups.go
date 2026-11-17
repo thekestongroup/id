@@ -300,6 +300,9 @@ type memberRef struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Email string `json:"email"`
+	// Note: for someone who joined but has no seat for a licence the group
+	// gives ("Not licensed: no seats left").
+	Note string `json:"note,omitempty"`
 }
 
 // POST …/groups/bulk/members {groupIds, add: [userId], remove: [userId]}:
@@ -419,7 +422,7 @@ func (a *API) bulkGroupMembers(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			a.audit(r, store.ActionGroupMemberAdded, aboutUser(u), "Group: "+g.Name)
-			res.Added = append(res.Added, memberRef{u.ID, u.Name, u.Email})
+			res.Added = append(res.Added, memberRef{u.ID, u.Name, u.Email, a.notLicensedNote(r, u)})
 		}
 		for _, u := range remove {
 			if !in[u.ID] {
@@ -430,7 +433,7 @@ func (a *API) bulkGroupMembers(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			a.audit(r, store.ActionGroupMemberRemoved, aboutUser(u), "Group: "+g.Name)
-			res.Removed = append(res.Removed, memberRef{u.ID, u.Name, u.Email})
+			res.Removed = append(res.Removed, memberRef{u.ID, u.Name, u.Email, ""})
 		}
 		res.MemberCount += len(res.Added) - len(res.Removed)
 		if len(res.Added)+len(res.Removed) == 0 {

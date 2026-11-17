@@ -45,6 +45,10 @@ type OrgSummary struct {
 		// have at least one.
 		InUse         int `json:"inUse"`
 		LicensedUsers int `json:"licensedUsers"`
+		// Unlicensed: people a group gives a licence to who have no seat left
+		// (Needs attention), and UnlicensedByProduct the same by product ID.
+		Unlicensed          int            `json:"unlicensed"`
+		UnlicensedByProduct map[string]int `json:"unlicensedByProduct"`
 	} `json:"licences"`
 	SignIns struct {
 		// The last 7 days (today and the 6 before, UTC).
@@ -79,12 +83,15 @@ func (s *Store) OrganisationSummary(ctx context.Context, orgID string) (*OrgSumm
 			count(*) FILTER (WHERE status = 'active' AND mfa),
 			(SELECT o.mfa_mode FROM organisations o WHERE o.id = $1),
 			(SELECT count(*) FROM groups g WHERE g.organisation_id = $1),
-			(SELECT count(*) FROM user_licences l JOIN u ON u.id = l.user_id),
-			(SELECT count(DISTINCT l.user_id) FROM user_licences l JOIN u ON u.id = l.user_id)
+			(SELECT count(*) FROM effective_licences l WHERE l.organisation_id = $1 AND l.licensed),
+			(SELECT count(DISTINCT l.user_id) FROM effective_licences l WHERE l.organisation_id = $1 AND l.licensed)
 		FROM u`, orgID).Scan(&out.Users.Total, &out.Users.Active, &out.Users.Disabled, &out.Users.Locked,
 		&out.Users.PasswordChangeRequired, &out.MFA.Eligible, &out.MFA.Enrolled, &out.MFA.Mode, &out.Groups,
 		&out.Licences.InUse, &out.Licences.LicensedUsers)
 	if err != nil {
+		return nil, err
+	}
+	if out.Licences.Unlicensed, out.Licences.UnlicensedByProduct, err = s.UnlicensedSummary(ctx, orgID); err != nil {
 		return nil, err
 	}
 

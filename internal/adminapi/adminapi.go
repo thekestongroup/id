@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -156,6 +157,10 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermGroups)).Patch("/groups/{groupID}", a.renameGroup)
 		r.With(a.need(store.PermGroups)).Delete("/groups/{groupID}", a.deleteGroup)
 		r.With(a.need(store.PermAssign)).Put("/groups/{groupID}/permissions", a.putGroupPermissions)
+		// Licences a group gives its members (view with the groups; change
+		// with Assign licences).
+		r.With(a.need(store.PermViewUsers)).Get("/groups/{groupID}/licences", a.getGroupLicences)
+		r.With(a.need(store.PermLicences)).Put("/groups/{groupID}/licences", a.putGroupLicences)
 		// Who's in a group: Manage groups, or Give permissions for a group
 		// that has permissions (checked in the handlers).
 		r.With(a.need(store.PermViewUsers)).Put("/groups/{groupID}/members/{userID}", a.addMember)
@@ -164,6 +169,11 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermSettings)).Put("/settings", a.putSettings)
 		r.With(a.need(store.PermPolicy)).Get("/password-policy", a.getPolicy)
 		r.With(a.need(store.PermPolicy)).Put("/password-policy", a.putPolicy)
+		// Security defaults, Secure Score and alerts (security.go).
+		r.With(a.need(store.PermPolicy)).Get("/security/defaults", a.getSecurityDefaults)
+		r.With(a.need(store.PermPolicy)).Post("/security/defaults/apply", a.applySecurityDefaults)
+		r.With(a.need(store.PermPolicy)).Post("/security/defaults/sign-in-review", a.markSignInsReviewed)
+		r.With(a.need(store.PermReports)).Get("/security/alerts", a.listSecurityAlerts)
 		r.With(a.need(store.PermReports)).Get("/audit-log", a.auditLog)
 		r.With(a.need(store.PermReports)).Get("/sign-ins", a.signIns)
 		// Sign-in requirements and access passes (signin.go).
@@ -753,6 +763,7 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(r, store.ActionUserCreated, aboutUser(created), summary("Role: "+roleLabel(created.Role)+platformSuffix(created.PlatformAdmin),
 		a.profileSummary(r, org.ID, defs, prof)))
+	a.alertAdminAdded(r, created)
 	if len(body.Licences) > 0 && !a.setLicences(w, r, created, body.Licences) {
 		return
 	}
@@ -887,15 +898,48 @@ func (a *API) putPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p = p.Normalise()
-	before := organisation(r).PasswordPolicy
-	if err := a.store.SetPasswordPolicy(r.Context(), organisation(r).ID, p); err != nil {
+	if err := a.applyPasswordPolicy(r, p); err != nil {
 		serverError(w, r, err)
 		return
 	}
-	slog.Info("password policy changed", "organisation", organisation(r).ID, "by", caller(r).ID)
-	a.audit(r, store.ActionPasswordPolicy, aboutOrg(organisation(r)), policyChanges(before, p))
 	writeJSON(w, http.StatusOK, map[string]any{"policy": p, "rules": p.Rules(),
 		"baselineMinLength": policy.BaselineMinLength})
+}
+
+// applyPasswordPolicy saves the (normalised) policy and records it: the
+// audit log, and an alert if it got weaker. The password policy page and the
+// security defaults share it.
+func (a *API) applyPasswordPolicy(r *http.Request, p policy.Policy) error {
+	org := organisation(r)
+	before := org.PasswordPolicy
+	if err := a.store.SetPasswordPolicy(r.Context(), org.ID, p); err != nil {
+		return err
+	}
+	slog.Info("password policy changed", "organisation", org.ID, "by", caller(r).ID)
+	a.audit(r, store.ActionPasswordPolicy, aboutOrg(org), policyChanges(before, p))
+	if policyWeakened(before, p) {
+		a.alert(r, store.NewAlert{Kind: store.AlertPasswordWeaker, Severity: store.AlertSeverityWarning,
+			Title:  "The password policy was weakened",
+			Body:   actorName(r) + " made the password rules for " + org.Name + " less strict.",
+			Params: map[string]any{"by": actorName(r)}, DedupeKey: store.AlertPasswordWeaker, DedupeFor: 10 * time.Minute})
+	}
+	return nil
+}
+
+// policyWeakened: after asks less of passwords than before (shorter, fewer
+// required characters, or fewer banned passwords).
+func policyWeakened(before, after policy.Policy) bool {
+	if after.MinLength < before.MinLength || after.MinUppercase < before.MinUppercase ||
+		after.MinLowercase < before.MinLowercase || after.MinDigits < before.MinDigits ||
+		after.MinSpecial < before.MinSpecial {
+		return true
+	}
+	for _, b := range before.Blocked {
+		if !slices.Contains(after.Blocked, b) {
+			return true
+		}
+	}
+	return false
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -965,7 +1009,14 @@ func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	licences, err := a.store.Licences(ctx, u.ID)
+	// licences: assigned to them (what Manage licences edits);
+	// licenceSources: every licence, with where it comes from.
+	licences, err := a.store.DirectLicences(ctx, u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	sources, err := a.store.LicenceSources(ctx, u.ID)
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -994,7 +1045,9 @@ func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
 		Roles       []string      `json:"roles"`
 		Profile     profileJSON   `json:"profile"`
 		Reports     []personRef   `json:"reports"`
-	}{a.withPasskeyCount(r, a.userView(u)), groups, perms.List(), canChange && !u.IsSupport(), licences, roles, prof, reports})
+		// Every licence, direct or through groups, and whether it has a seat.
+		LicenceSources []store.LicenceSource `json:"licenceSources"`
+	}{a.withPasskeyCount(r, a.userView(u)), groups, perms.List(), canChange && !u.IsSupport(), licences, roles, prof, reports, sources})
 }
 
 // PATCH …/users/{id} {name?, username?, role?}: admins can always change
@@ -1092,6 +1145,9 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("account updated", "user", u.ID, "by", caller(r).ID)
+	if (u.Role != "global_admin" && updated.Role == "global_admin") || (!platformBefore && updated.PlatformAdmin) {
+		a.alertAdminAdded(r, updated)
+	}
 	roleAfter := u.Role
 	if body.Role != nil {
 		roleAfter = *body.Role

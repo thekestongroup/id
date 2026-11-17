@@ -52,32 +52,50 @@ func (a *API) putMFAPolicy(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "gracePeriodDays", "Enter a number of days from 0 to 90")
 		return
 	}
+	if err := a.applyMFAPolicy(r, body.Mode, body.GracePeriodDays, body.Required); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	a.getMFAPolicy(w, r)
+}
+
+// applyMFAPolicy changes any of the MFA mode, grace period and "everyone
+// else" default, and records it (audit log, and an alert if MFA is turned
+// off). The MFA settings page and the security defaults share it.
+func (a *API) applyMFAPolicy(r *http.Request, mode *string, graceDays *int, required *bool) error {
+	body := struct {
+		Mode            *string
+		GracePeriodDays *int
+		Required        *bool
+	}{mode, graceDays, required}
 	ctx := r.Context()
 	org := organisation(r)
 	before, err := a.store.MFAPolicy(ctx, org.ID)
 	if err != nil {
-		serverError(w, r, err)
-		return
+		return err
 	}
 	changes := []string{}
 	if body.Mode != nil && *body.Mode != before.Mode {
 		if err := a.store.SetMFAMode(ctx, org.ID, *body.Mode); err != nil {
-			serverError(w, r, err)
-			return
+			return err
 		}
 		changes = append(changes, change("Multi-factor authentication", mfaModeLabel(before.Mode), mfaModeLabel(*body.Mode)))
+		if *body.Mode == store.MFAOff {
+			a.alert(r, store.NewAlert{Kind: store.AlertMFAOff, Severity: store.AlertSeverityHigh,
+				Title:  "Multi-factor authentication was turned off",
+				Body:   actorName(r) + " turned off multi-factor authentication for " + org.Name + ".",
+				Params: map[string]any{"by": actorName(r)}, DedupeKey: store.AlertMFAOff, DedupeFor: 10 * time.Minute})
+		}
 	}
 	if body.GracePeriodDays != nil && *body.GracePeriodDays != before.GracePeriodDays {
 		if err := a.store.SetMFAGraceDays(ctx, org.ID, *body.GracePeriodDays); err != nil {
-			serverError(w, r, err)
-			return
+			return err
 		}
 		changes = append(changes, change("Grace period", days(before.GracePeriodDays), days(*body.GracePeriodDays)))
 	}
 	if body.Required != nil && *body.Required != before.Required {
 		if err := a.store.SetMFARequired(ctx, org.ID, *body.Required); err != nil {
-			serverError(w, r, err)
-			return
+			return err
 		}
 		changes = append(changes, "Everyone else: "+requiredLabel(body.Required))
 	}
@@ -85,7 +103,7 @@ func (a *API) putMFAPolicy(w http.ResponseWriter, r *http.Request) {
 		slog.Info("mfa policy changed", "organisation", org.ID, "changes", changes, "by", caller(r).ID)
 		a.audit(r, store.ActionMFAPolicy, aboutOrg(org), strings.Join(changes, ". "))
 	}
-	a.getMFAPolicy(w, r)
+	return nil
 }
 
 func mfaModeLabel(mode string) string {

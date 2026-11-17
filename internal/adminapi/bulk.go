@@ -266,7 +266,7 @@ func (a *API) bulkGroup(add bool) http.HandlerFunc {
 		if add {
 			action = "add to group"
 		}
-		a.runBulk(w, r, body.UserIDs, action, false, func(u *store.User, _ *bulkResult) (string, error) {
+		a.runBulk(w, r, body.UserIDs, action, false, func(u *store.User, res *bulkResult) (string, error) {
 			if add {
 				if in[u.ID] {
 					return "Already in " + g.Name + ".", nil
@@ -275,6 +275,7 @@ func (a *API) bulkGroup(add bool) http.HandlerFunc {
 					return "", err
 				}
 				a.audit(r, store.ActionGroupMemberAdded, aboutUser(u), "Group: "+g.Name)
+				res.Reason = a.notLicensedNote(r, u)
 				return "", nil
 			}
 			if !in[u.ID] {
@@ -349,8 +350,8 @@ func (a *API) bulkGroups(w http.ResponseWriter, r *http.Request) {
 			members[g.ID][m.ID] = true
 		}
 	}
-	a.runBulk(w, r, body.UserIDs, "group memberships", false, func(u *store.User, _ *bulkResult) (string, error) {
-		changed := false
+	a.runBulk(w, r, body.UserIDs, "group memberships", false, func(u *store.User, res *bulkResult) (string, error) {
+		changed, joined := false, false
 		for _, g := range add {
 			if members[g.ID][u.ID] {
 				continue
@@ -359,7 +360,7 @@ func (a *API) bulkGroups(w http.ResponseWriter, r *http.Request) {
 				return "", err
 			}
 			a.audit(r, store.ActionGroupMemberAdded, aboutUser(u), "Group: "+g.Name)
-			changed = true
+			changed, joined = true, true
 		}
 		for _, g := range remove {
 			if !members[g.ID][u.ID] {
@@ -373,6 +374,9 @@ func (a *API) bulkGroups(w http.ResponseWriter, r *http.Request) {
 		}
 		if !changed {
 			return "Already in or out of those groups.", nil
+		}
+		if joined {
+			res.Reason = a.notLicensedNote(r, u)
 		}
 		return "", nil
 	})
