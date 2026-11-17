@@ -74,6 +74,7 @@ func (a *API) Routes() http.Handler {
 		// have any permission in Keston Admin.
 		r.Use(a.requireView)
 		r.Get("/", a.getOrganisation)
+		r.Get("/summary", a.getSummary)
 		r.Get("/support", a.getSupport)
 		r.Post("/support/requests", a.requestSupport)
 		r.Post("/support/requests/{requestID}/{decision:approve|deny}", a.decideSupport)
