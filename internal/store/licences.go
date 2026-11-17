@@ -33,6 +33,18 @@ type Product struct {
 	Available *int `json:"available"`
 	// OverAllocated: more in use than seats, so nothing more can be assigned.
 	OverAllocated bool `json:"overAllocated"`
+	// Direct: licences assigned straight to people (Assigned also counts
+	// those who only have it through a group, once, whichever way).
+	// Unlicensed: people a group gives it to who have no seat left.
+	Unlicensed int `json:"unlicensed"`
+	// Groups: the groups that give this licence to their members.
+	Groups []GroupRef `json:"groups"`
+}
+
+// GroupRef: a group, by ID and name.
+type GroupRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 func (p *Product) fill() {
@@ -63,23 +75,59 @@ func (e *NoSeatsError) Is(target error) bool { return target == ErrNoSeats }
 
 func (s *Store) Products(ctx context.Context, orgID string) ([]Product, error) {
 	rows, err := s.DB.Query(ctx, `SELECT c.id, c.name, c.publisher,
-		(SELECT count(*) FROM user_licences l JOIN users u ON u.id = l.user_id
-		 WHERE l.client_id = c.id AND u.organisation_id = $1 AND u.status <> 'deleted'),
-		(SELECT o.seats FROM org_licences o WHERE o.organisation_id = $1 AND o.client_id = c.id)
+		(SELECT count(*) FROM effective_licences e WHERE e.organisation_id = $1 AND e.client_id = c.id AND e.licensed),
+		(SELECT o.seats FROM org_licences o WHERE o.organisation_id = $1 AND o.client_id = c.id),
+		(SELECT count(*) FROM effective_licences e WHERE e.organisation_id = $1 AND e.client_id = c.id AND NOT e.licensed)
 		FROM clients c WHERE c.builtin ORDER BY c.name`, orgID)
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Product, error) {
+	list, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Product, error) {
 		var p Product
-		err := r.Scan(&p.ID, &p.Name, &p.Publisher, &p.Assigned, &p.Seats)
+		err := r.Scan(&p.ID, &p.Name, &p.Publisher, &p.Assigned, &p.Seats, &p.Unlicensed)
 		p.fill()
+		p.Groups = []GroupRef{}
 		return p, err
 	})
+	if err != nil {
+		return nil, err
+	}
+	grows, err := s.DB.Query(ctx, `SELECT gl.client_id, g.id::text, g.name FROM group_licences gl
+		JOIN groups g ON g.id = gl.group_id WHERE g.organisation_id = $1 ORDER BY lower(g.name)`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer grows.Close()
+	for grows.Next() {
+		var client string
+		var g GroupRef
+		if err := grows.Scan(&client, &g.ID, &g.Name); err != nil {
+			return nil, err
+		}
+		for i := range list {
+			if list[i].ID == client {
+				list[i].Groups = append(list[i].Groups, g)
+			}
+		}
+	}
+	return list, grows.Err()
 }
 
-// Licences: the products someone has a licence for.
+// Licences: the products someone has a licence for and a seat in: assigned
+// to them or through a group (effective_licences).
 func (s *Store) Licences(ctx context.Context, userID string) ([]string, error) {
+	rows, err := s.DB.Query(ctx, `SELECT e.client_id FROM effective_licences e
+		WHERE e.organisation_id = (SELECT organisation_id FROM users WHERE id = $1)
+		AND e.user_id = $1 AND e.licensed ORDER BY e.client_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+// DirectLicences: only the products assigned to someone themselves (what
+// Manage licences changes), not those through groups.
+func (s *Store) DirectLicences(ctx context.Context, userID string) ([]string, error) {
 	rows, err := s.DB.Query(ctx, `SELECT client_id FROM user_licences WHERE user_id = $1 ORDER BY client_id`, userID)
 	if err != nil {
 		return nil, err
@@ -87,10 +135,46 @@ func (s *Store) Licences(ctx context.Context, userID string) ([]string, error) {
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
-// LicencesInOrganisation: everyone's licences, by user ID.
+// LicenceSource: where someone's licence for a product comes from.
+type LicenceSource struct {
+	Product string `json:"product"`
+	Name    string `json:"name"`
+	// Direct: assigned to them. Groups: the groups that give it to them.
+	Direct bool       `json:"direct"`
+	Groups []GroupRef `json:"groups"`
+	// Licensed: they have a seat. False only for a licence through groups
+	// when the organisation has no seats left ("Not licensed: no seats left").
+	Licensed bool `json:"licensed"`
+}
+
+// LicenceSources: every licence someone holds or is given through groups,
+// and whether each has a seat.
+func (s *Store) LicenceSources(ctx context.Context, userID string) ([]LicenceSource, error) {
+	rows, err := s.DB.Query(ctx, `SELECT e.client_id, c.name, e.direct, e.licensed,
+		coalesce((SELECT json_agg(json_build_object('id', g.id, 'name', g.name) ORDER BY lower(g.name))
+			FROM group_members m JOIN group_licences gl ON gl.group_id = m.group_id
+			JOIN groups g ON g.id = m.group_id
+			WHERE m.user_id = $1 AND gl.client_id = e.client_id AND g.organisation_id = e.organisation_id), '[]'::json)
+		FROM effective_licences e JOIN clients c ON c.id = e.client_id
+		WHERE e.organisation_id = (SELECT organisation_id FROM users WHERE id = $1) AND e.user_id = $1
+		ORDER BY c.name`, userID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (LicenceSource, error) {
+		var l LicenceSource
+		err := r.Scan(&l.Product, &l.Name, &l.Direct, &l.Licensed, &l.Groups)
+		if l.Groups == nil {
+			l.Groups = []GroupRef{}
+		}
+		return l, err
+	})
+}
+
+// LicencesInOrganisation: everyone's licences (with a seat), by user ID.
 func (s *Store) LicencesInOrganisation(ctx context.Context, orgID string) (map[string][]string, error) {
-	rows, err := s.DB.Query(ctx, `SELECT l.user_id, l.client_id FROM user_licences l
-		JOIN users u ON u.id = l.user_id WHERE u.organisation_id = $1 ORDER BY l.client_id`, orgID)
+	rows, err := s.DB.Query(ctx, `SELECT e.user_id, e.client_id FROM effective_licences e
+		WHERE e.organisation_id = $1 AND e.licensed ORDER BY e.client_id`, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +188,18 @@ func (s *Store) LicencesInOrganisation(ctx context.Context, orgID string) (map[s
 		out[user] = append(out[user], client)
 	}
 	return out, rows.Err()
+}
+
+// UnlicensedProducts: the names of the products a group gives someone but
+// they have no seat for.
+func (s *Store) UnlicensedProducts(ctx context.Context, userID string) ([]string, error) {
+	rows, err := s.DB.Query(ctx, `SELECT c.name FROM effective_licences e JOIN clients c ON c.id = e.client_id
+		WHERE e.organisation_id = (SELECT organisation_id FROM users WHERE id = $1)
+		AND e.user_id = $1 AND NOT e.licensed ORDER BY c.name`, userID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
 // SetLicences makes someone's licences exactly these products (unknown IDs
@@ -154,7 +250,20 @@ func (s *Store) SetLicences(ctx context.Context, userID string, by *string, prod
 			removed = append(removed, p)
 		}
 	}
-	if err := checkSeats(ctx, tx, orgID, added, 1); err != nil {
+	// A licence they already have a seat for through a group needs no new one.
+	var needSeat []string
+	for _, p := range added {
+		var has bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM effective_licences
+			WHERE organisation_id = $1 AND user_id = $2 AND client_id = $3 AND licensed)`,
+			orgID, userID, p).Scan(&has); err != nil {
+			return nil, nil, err
+		}
+		if !has {
+			needSeat = append(needSeat, p)
+		}
+	}
+	if err := checkSeats(ctx, tx, orgID, needSeat, 1); err != nil {
 		return nil, nil, err
 	}
 	if len(removed) > 0 {
@@ -193,8 +302,8 @@ func checkSeats(ctx context.Context, q queryRower, orgID string, products []stri
 		var used int
 		if err := q.QueryRow(ctx, `SELECT c.name,
 			(SELECT o.seats FROM org_licences o WHERE o.organisation_id = $1 AND o.client_id = c.id),
-			(SELECT count(*) FROM user_licences l JOIN users u ON u.id = l.user_id
-			 WHERE l.client_id = c.id AND u.organisation_id = $1 AND u.status <> 'deleted')
+			(SELECT count(*) FROM effective_licences e
+			 WHERE e.client_id = c.id AND e.organisation_id = $1 AND e.licensed)
 			FROM clients c WHERE c.id = $2`, orgID, p).Scan(&name, &seats, &used); err != nil {
 			return err
 		}
@@ -276,7 +385,8 @@ func (s *Store) SetAllocations(ctx context.Context, orgID string, by *string, se
 	return strings.Join(parts, ". "), tx.Commit(ctx)
 }
 
-// Licensed: whether someone may use this app as far as licences go (always,
+// Licensed: whether someone may use this app as far as licences go: assigned
+// to them, or through a group with a seat left (always,
 // for apps that aren't Keston products, and for support accounts).
 func (s *Store) Licensed(ctx context.Context, u *User, clientID string) (bool, error) {
 	if u.IsSupport() {
@@ -284,7 +394,9 @@ func (s *Store) Licensed(ctx context.Context, u *User, clientID string) (bool, e
 	}
 	var ok bool
 	err := s.DB.QueryRow(ctx, `SELECT NOT EXISTS (SELECT 1 FROM clients WHERE id = $2 AND builtin)
-		OR EXISTS (SELECT 1 FROM user_licences WHERE user_id = $1 AND client_id = $2)`, u.ID, clientID).Scan(&ok)
+		OR EXISTS (SELECT 1 FROM user_licences WHERE user_id = $1 AND client_id = $2)
+		OR EXISTS (SELECT 1 FROM effective_licences WHERE organisation_id = $3 AND user_id = $1 AND client_id = $2
+			AND licensed)`, u.ID, clientID, u.OrganisationID).Scan(&ok)
 	return ok, err
 }
 

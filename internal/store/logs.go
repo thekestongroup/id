@@ -52,6 +52,7 @@ const (
 	ActionGroupMemberAdded     = "group.member_added"
 	ActionGroupMemberRemoved   = "group.member_removed"
 	ActionGroupPermissions     = "group.permissions_changed"
+	ActionGroupLicences        = "group.licences_changed"
 	ActionAppAccess            = "app.access_changed"
 	ActionKestonAppCreated     = "keston_app.created"
 	ActionKestonAppUpdated     = "keston_app.updated"
