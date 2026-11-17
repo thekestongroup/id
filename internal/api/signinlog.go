@@ -10,7 +10,7 @@ import (
 // logSignIn records a sign-in attempt (Keston Admin → Logs → Sign-ins),
 // with where it came from.
 func (a *API) logSignIn(r *http.Request, e store.SignIn) {
-	e.IP, e.UserAgent = clientip.From(r), r.UserAgent()
+	e.IP, e.UserAgent, e.Country = clientip.From(r), r.UserAgent(), clientip.Country(r)
 	a.store.LogSignIn(r.Context(), e)
 }
 

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/thekestongroup/id/internal/store"
 )
@@ -96,6 +97,13 @@ func (a *API) applyRoles(w http.ResponseWriter, r *http.Request, u *store.User, 
 			parts = append(parts, "Removed: "+roleLabels(removed))
 		}
 		a.audit(r, store.ActionUserRoles, aboutUser(u), strings.Join(parts, ". "))
+		if len(added) > 0 {
+			a.alert(r, store.NewAlert{Kind: store.AlertAdminRole, SubjectID: u.ID, SubjectName: u.Name,
+				Title:     "Admin role given to " + u.Name,
+				Body:      actorName(r) + " gave " + u.Name + " the admin role " + roleLabels(added) + ".",
+				Params:    map[string]any{"by": actorName(r), "roles": roleLabels(added)},
+				DedupeKey: store.AlertAdminRole + ":" + u.ID + ":" + strings.Join(added, ","), DedupeFor: 10 * time.Minute})
+		}
 	}
 	return true
 }
