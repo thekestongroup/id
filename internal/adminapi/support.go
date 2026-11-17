@@ -390,17 +390,35 @@ func (a *API) scheduleDeletion(w http.ResponseWriter, r *http.Request) {
 func (a *API) cancelDeletion(w http.ResponseWriter, r *http.Request) {
 	u := caller(r)
 	org := organisation(r)
-	if !decides(u, org.ID) {
+	// TKG Admins can cancel it without support access (like delete now); no
+	// one else but the organisation's own global admins.
+	staff := u.PlatformAdmin && !decides(u, org.ID)
+	if !staff && !decides(u, org.ID) {
 		writeError(w, http.StatusForbidden, "forbidden", "Only "+org.Name+"'s global admins can cancel it.")
 		return
 	}
-	if ok, err := a.store.CancelDeletion(r.Context(), org.ID); err != nil {
+	ok, err := a.store.CancelDeletion(r.Context(), org.ID)
+	if err != nil {
 		serverError(w, r, err)
 		return
-	} else if ok {
+	}
+	if !ok && staff {
+		writeError(w, http.StatusConflict, "not_scheduled", org.Name+" isn't scheduled for deletion.")
+		return
+	}
+	if ok {
 		a.notifyAdmins(r.Context(), org, "info", "Deletion cancelled", u.Name+" cancelled deleting "+org.Name+".",
 			orgLink(org))
 		a.audit(r, store.ActionDeletionCancelled, aboutOrg(org), "")
+		if staff {
+			// Also in The Keston Group's own log: who cancelled it, for which organisation.
+			var platformID string
+			if err := a.store.DB.QueryRow(r.Context(), `SELECT id::text FROM organisations WHERE is_platform`).Scan(&platformID); err != nil {
+				slog.Warn("audit deletion cancel in platform log", "error", err)
+			} else {
+				a.auditIn(r, platformID, store.ActionDeletionCancelled, aboutOrg(org), "Cancelled by TKG Admin "+u.Name+" for "+org.Name)
+			}
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

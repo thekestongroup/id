@@ -137,3 +137,49 @@ func TestBillingAccess(t *testing.T) {
 		t.Errorf("staff users: %d, want 403", code)
 	}
 }
+
+// A TKG Admin can cancel a scheduled deletion without support access; the
+// cancel is in both the organisation's and The Keston Group's logs.
+func TestStaffCancelDeletion(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	platform, staff := e.platformAdmin()
+	admin := e.admin()
+	helper := e.user("helper", "member")
+	if err := e.st.AddGroupMember(ctx, e.group("Helpdesk", store.PermViewUsers).ID, helper.ID); err != nil {
+		t.Fatal(err)
+	}
+	path := "/organisations/" + e.org.ID + "/deletion"
+
+	// Not scheduled: a clear error.
+	if code, raw := e.call(staff, http.MethodDelete, path, nil); code != http.StatusConflict || !strings.Contains(string(raw), "not_scheduled") {
+		t.Fatalf("not scheduled: %d %s", code, raw)
+	}
+	if _, err := e.st.ScheduleDeletion(ctx, e.org.ID, admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Someone with permissions but not a global admin: refused.
+	if code, _ := e.call(helper, http.MethodDelete, path, nil); code != http.StatusForbidden {
+		t.Errorf("non-admin: %d, want 403", code)
+	}
+	if o, _ := e.st.OrganisationByID(ctx, e.org.ID); o.DeleteAfter == nil {
+		t.Fatal("deletion cancelled by a non-admin")
+	}
+	// A TKG Admin without support access can.
+	if code, raw := e.call(staff, http.MethodDelete, path, nil); code != http.StatusNoContent {
+		t.Fatalf("staff cancel: %d %s", code, raw)
+	}
+	if o, _ := e.st.OrganisationByID(ctx, e.org.ID); o.DeleteAfter != nil {
+		t.Error("still scheduled")
+	}
+	for _, org := range []string{e.org.ID, platform.ID} {
+		var n int
+		if err := e.st.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE organisation_id = $1 AND action = $2
+			AND target_id = $3 AND actor_id = $4`, org, store.ActionDeletionCancelled, e.org.ID, staff.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Errorf("audit entries in %s: %d, want 1", org, n)
+		}
+	}
+}
