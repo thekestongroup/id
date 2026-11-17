@@ -56,6 +56,30 @@ func TestNeverWeakerThanBaseline(t *testing.T) {
 	}
 }
 
+func TestMinLengthRaisedToWhatIsRequired(t *testing.T) {
+	cases := []struct {
+		p    Policy
+		want int
+	}{
+		{Policy{MinLength: 8, MinUppercase: 5, MinLowercase: 5, MinDigits: 5, MinSpecial: 5}, 20},
+		{Policy{MinLength: 14, MinUppercase: 1, MinLowercase: 1, MinDigits: 1, MinSpecial: 1}, 14}, // already long enough
+		{Policy{MinLength: 12, MinDigits: 1}, 12},
+		{Policy{MinUppercase: 32, MinLowercase: 32, MinDigits: 32, MinSpecial: 32}, 128},
+		{Policy{MinLength: 100, MinUppercase: 32, MinLowercase: 32, MinDigits: 32, MinSpecial: 32}, 128}, // never above the maximum
+		{Policy{MinLength: 9, MinDigits: 1, MinSpecial: -5}, 9},                                          // negative counts add nothing
+	}
+	for _, c := range cases {
+		if got := c.p.Normalise().MinLength; got != c.want {
+			t.Errorf("%+v: MinLength = %d, want %d", c.p, got, c.want)
+		}
+	}
+	// A password that has every kind required but is shorter than they add up to fails the length rule.
+	p := Policy{MinUppercase: 5, MinLowercase: 5, MinDigits: 5, MinSpecial: 5}
+	if got := ids(p.Check("Aa1!Aa1!")); !slices.Contains(got, "length") {
+		t.Errorf("an 8-character password should fail a policy needing 20 characters, got %v", got)
+	}
+}
+
 func TestAvoid(t *testing.T) {
 	if got := ids(Policy{}.Check("headoffice", "headoffice")); !slices.Equal(got, []string{"common"}) {
 		t.Errorf("password equal to the username should fail, got %v", got)
