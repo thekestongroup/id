@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -36,18 +37,31 @@ type Client struct {
 	LogoURL  string `json:"logoUrl"`
 	// A single-page or mobile app (PKCE, no secret), added by an organisation.
 	Native bool `json:"native"`
+	// What the app is for (shown to organisations on its page).
+	Description string `json:"description"`
+	// Who manages it: "deployment" (deploy/clients.json, read-only in Keston
+	// Admin) or "admin" (TKG Admins, or the organisation that added it).
+	ManagedBy string `json:"-"`
+	// Set when a Keston-wide app has been retired.
+	RetiredAt *time.Time `json:"-"`
 }
+
+// Who manages an app.
+const (
+	ManagedByDeployment = "deployment"
+	ManagedByAdmin      = "admin"
+)
 
 const clientColumns = `id, name, publisher, verification, secret_hash, redirect_uris, post_logout_redirect_uris,
 	required_scopes, optional_scopes, skip_consent, backchannel_logout_uri, privacy_url, terms_url, dev_mode, builtin,
-	organisation_id, protocol, logo_url, native`
+	organisation_id, protocol, logo_url, native, description, managed_by, retired_at`
 
 func scanClient(row pgx.Row) (*Client, error) {
 	var c Client
 	if err := row.Scan(&c.ID, &c.Name, &c.Publisher, &c.Verification, &c.SecretHash, &c.RedirectURIs,
 		&c.PostLogoutRedirectURIs, &c.RequiredScopes, &c.OptionalScopes, &c.SkipConsent, &c.BackchannelLogoutURI,
 		&c.PrivacyURL, &c.TermsURL, &c.DevMode, &c.Builtin, &c.OrganisationID, &c.Protocol, &c.LogoURL,
-		&c.Native); err != nil {
+		&c.Native, &c.Description, &c.ManagedBy, &c.RetiredAt); err != nil {
 		return nil, notFound(err)
 	}
 	return &c, nil
@@ -57,22 +71,36 @@ func (s *Store) ClientByID(ctx context.Context, id string) (*Client, error) {
 	return scanClient(s.DB.QueryRow(ctx, `SELECT `+clientColumns+` FROM clients WHERE id = $1`, id))
 }
 
-// UpsertClient registers or updates an app. A nil secretHash keeps the
-// current secret; an empty one makes it a public client.
+// UpsertClient registers or updates an app from deploy/clients.json (see
+// `keston-id clients sync`). A nil secretHash keeps the current secret; an
+// empty one makes it a public client. Only apps managed by the deployment
+// are changed: one a TKG Admin created or took over in Keston Admin
+// (managed_by 'admin'), or an organisation's own, is left as it is.
 func (s *Store) UpsertClient(ctx context.Context, c *Client, secretHash *string) error {
 	_, err := s.DB.Exec(ctx, `INSERT INTO clients (id, name, publisher, verification, secret_hash, redirect_uris,
 			post_logout_redirect_uris, required_scopes, optional_scopes, skip_consent, backchannel_logout_uri,
-			privacy_url, terms_url, dev_mode, builtin)
-		VALUES ($1, $2, $3, $4, nullif($5, ''), $6, $7, $8, $9, $10, $11, $12, $13, $14, $16)
+			privacy_url, terms_url, dev_mode, builtin, description, managed_by)
+		VALUES ($1, $2, $3, $4, nullif($5, ''), $6, $7, $8, $9, $10, $11, $12, $13, $14, $16, $17, 'deployment')
 		ON CONFLICT (id) DO UPDATE SET name = $2, publisher = $3, verification = $4,
 			secret_hash = CASE WHEN $15 THEN nullif($5, '') ELSE clients.secret_hash END,
 			redirect_uris = $6, post_logout_redirect_uris = $7, required_scopes = $8, optional_scopes = $9,
 			skip_consent = $10, backchannel_logout_uri = $11, privacy_url = $12, terms_url = $13, dev_mode = $14,
-			builtin = $16`,
+			builtin = $16, description = $17
+		WHERE clients.managed_by = 'deployment' AND clients.organisation_id IS NULL`,
 		c.ID, c.Name, c.Publisher, c.Verification, deref(secretHash), c.RedirectURIs, c.PostLogoutRedirectURIs,
 		c.RequiredScopes, c.OptionalScopes, c.SkipConsent, c.BackchannelLogoutURI, c.PrivacyURL, c.TermsURL,
-		c.DevMode, secretHash != nil, c.Builtin)
+		c.DevMode, secretHash != nil, c.Builtin, c.Description)
 	return err
+}
+
+// ClientManagedBy: who manages an app that exists ("" if it doesn't).
+func (s *Store) ClientManagedBy(ctx context.Context, id string) (string, error) {
+	var by string
+	err := s.DB.QueryRow(ctx, `SELECT managed_by FROM clients WHERE id = $1`, id).Scan(&by)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return by, err
 }
 
 func deref(s *string) string {

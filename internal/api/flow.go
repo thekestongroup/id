@@ -79,7 +79,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		return nil, http.StatusGone, "This sign-in link has expired. Go back to the app and try again."
 	}
 	client, err := a.store.ClientByID(ctx, ar.ClientID)
-	if err != nil {
+	if err != nil || client.RetiredAt != nil {
 		return nil, http.StatusGone, "This app is no longer registered with Keston ID."
 	}
 	cv := viewClient(client, ar.RedirectURI)
@@ -141,7 +141,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 			". Ask one of " + cur.user.Organisation + "'s admins if you need it."
 	}
 	// Turned off for them by their organisation (Keston Admin → Apps).
-	if eff, err := a.store.EffectiveApps(ctx, cur.user); err == nil && eff[client.ID] == store.AppDisabled {
+	if eff, err := a.store.EffectiveAppsFrom(ctx, cur.user, clientIP(r)); err == nil && eff[client.ID] == store.AppDisabled {
 		a.logSignIn(r, store.SignIn{User: cur.user, Method: store.SignInApp, ClientID: client.ID,
 			Reason: store.ReasonAppDisabled})
 		return nil, http.StatusForbidden, cur.user.Organisation + " has turned off " + client.Name +

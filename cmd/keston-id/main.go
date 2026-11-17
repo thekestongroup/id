@@ -216,6 +216,13 @@ func syncClients(ctx context.Context, st *store.Store, file string) error {
 				*list = []string{}
 			}
 		}
+		// Apps TKG Admins manage in Keston Admin are never overwritten.
+		if by, err := st.ClientManagedBy(ctx, c.ID); err != nil {
+			return fmt.Errorf("client %q: %w", c.ID, err)
+		} else if by != "" && by != store.ManagedByDeployment {
+			slog.Warn("client skipped: managed in Keston Admin, not by this file", "id", c.ID, "managedBy", by)
+			continue
+		}
 		var secretHash *string
 		if c.SecretEnv != "" {
 			value := os.Getenv(c.SecretEnv)

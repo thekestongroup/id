@@ -21,14 +21,14 @@ func (s *Store) collectClients(rows pgx.Rows, err error) ([]Client, error) {
 
 // BuiltinClients are Keston's own apps, which every organisation has.
 func (s *Store) BuiltinClients(ctx context.Context) ([]Client, error) {
-	return s.collectClients(s.DB.Query(ctx, `SELECT `+clientColumns+` FROM clients WHERE builtin ORDER BY name`))
+	return s.collectClients(s.DB.Query(ctx, `SELECT `+clientColumns+` FROM clients WHERE builtin AND retired_at IS NULL ORDER BY name`))
 }
 
 // ClientsFor is every app an organisation can use: those Keston registered,
 // and its own (never another organisation's).
 func (s *Store) ClientsFor(ctx context.Context, orgID string) ([]Client, error) {
 	return s.collectClients(s.DB.Query(ctx, `SELECT `+clientColumns+` FROM clients
-		WHERE organisation_id IS NULL OR organisation_id = $1 ORDER BY name`, orgID))
+		WHERE retired_at IS NULL AND (organisation_id IS NULL OR organisation_id = $1) ORDER BY name`, orgID))
 }
 
 // RemovedApps: apps this person has turned off (where they're allowed to).

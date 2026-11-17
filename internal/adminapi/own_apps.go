@@ -51,13 +51,14 @@ const (
 )
 
 type ownAppJSON struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Protocol   string `json:"protocol"`
-	LogoURL    string `json:"logoUrl"`
-	PrivacyURL string `json:"privacyUrl"`
-	TermsURL   string `json:"termsUrl"`
-	OIDC       *struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Protocol    string `json:"protocol"`
+	LogoURL     string `json:"logoUrl"`
+	PrivacyURL  string `json:"privacyUrl"`
+	TermsURL    string `json:"termsUrl"`
+	OIDC        *struct {
 		Type                   string   `json:"type"`
 		ClientID               string   `json:"clientId"`
 		HasSecret              bool     `json:"hasSecret"`
@@ -77,7 +78,7 @@ type ownAppJSON struct {
 }
 
 func (a *API) ownAppView(ctx context.Context, c *store.Client) (ownAppJSON, error) {
-	v := ownAppJSON{ID: c.ID, Name: c.Name, Protocol: c.Protocol, LogoURL: c.LogoURL, PrivacyURL: c.PrivacyURL,
+	v := ownAppJSON{ID: c.ID, Name: c.Name, Description: c.Description, Protocol: c.Protocol, LogoURL: c.LogoURL, PrivacyURL: c.PrivacyURL,
 		TermsURL: c.TermsURL}
 	switch c.Protocol {
 	case "saml":
@@ -166,11 +167,12 @@ func (a *API) writeOwnApp(w http.ResponseWriter, r *http.Request, status int, c 
 }
 
 type ownAppBody struct {
-	Protocol   *string `json:"protocol"`
-	Name       *string `json:"name"`
-	LogoURL    *string `json:"logoUrl"`
-	PrivacyURL *string `json:"privacyUrl"`
-	TermsURL   *string `json:"termsUrl"`
+	Protocol    *string `json:"protocol"`
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	LogoURL     *string `json:"logoUrl"`
+	PrivacyURL  *string `json:"privacyUrl"`
+	TermsURL    *string `json:"termsUrl"`
 	// OpenID Connect
 	Type                   *string   `json:"type"`
 	RedirectURIs           *[]string `json:"redirectUris"`
@@ -241,6 +243,14 @@ func (a *API) saveOwnApp(w http.ResponseWriter, r *http.Request, c *store.Client
 			return
 		}
 		c.Name = name
+	}
+	if body.Description != nil {
+		d := strings.TrimSpace(*body.Description)
+		if len(d) > 500 {
+			writeFieldError(w, "description", "Describe the app in up to 500 characters")
+			return
+		}
+		c.Description = d
 	}
 	for _, f := range []struct {
 		field  string

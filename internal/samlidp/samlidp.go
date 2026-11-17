@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -268,6 +269,13 @@ func (p *IdP) callback(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusForbidden, "Your account can't sign in to this app.")
 		return
 	}
+	// Turned off for them by their organisation (Keston Admin → Apps: the
+	// app's default or its access rules, which can depend on where they are).
+	if eff, err := p.store.EffectiveAppsFrom(ctx, user, requestIP(r)); err == nil && eff[c.ID] == store.AppDisabled {
+		fail(w, http.StatusForbidden, user.Organisation+" has turned off "+c.Name+" for your account. "+
+			"Ask one of its admins if you need it.")
+		return
+	}
 	idp, err := p.provider(ctx, c)
 	if err != nil {
 		serverError(w, r, err)
@@ -504,3 +512,13 @@ func (slogLogger) Panicf(format string, v ...any) {
 	slog.Error("saml", "message", fmt.Sprintf(format, v...))
 }
 func (slogLogger) Panicln(v ...any) { slog.Error("saml", "message", fmt.Sprint(v...)) }
+
+// requestIP is the address the request came from (as the proxy in front
+// reports it), for app access rules on IP addresses.
+func requestIP(r *http.Request) string {
+	if f := r.Header.Get("X-Forwarded-For"); f != "" {
+		return strings.TrimSpace(strings.Split(f, ",")[0])
+	}
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return host
+}
