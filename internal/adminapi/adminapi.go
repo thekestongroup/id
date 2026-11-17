@@ -74,6 +74,7 @@ func (a *API) Routes() http.Handler {
 		// have any permission in Keston Admin.
 		r.Use(a.requireView)
 		r.Get("/", a.getOrganisation)
+		r.Get("/summary", a.getSummary)
 		r.Get("/support", a.getSupport)
 		r.Post("/support/requests", a.requestSupport)
 		r.Post("/support/requests/{requestID}/{decision:approve|deny}", a.decideSupport)
@@ -84,6 +85,7 @@ func (a *API) Routes() http.Handler {
 		r.Post("/verify", a.verifyOrganisation)
 		r.Post("/deletion", a.scheduleDeletion)
 		r.Delete("/deletion", a.cancelDeletion)
+		r.Post("/delete-now", a.deleteNow)
 
 		// Its users and settings: its global admins, its users whose groups
 		// give them permissions, or Keston support through a support account
@@ -101,10 +103,12 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermResetMFA)).Delete("/users/{userID}/passkeys", a.removePasskeys)
 		r.With(a.need(store.PermDeleteUsers)).Delete("/users/{userID}", a.deleteUser)
 		r.With(a.need(store.PermViewUsers)).Get("/products", a.listProducts)
+		r.Put("/licences", a.putAllocations)
 		r.With(a.need(store.PermViewUsers)).Get("/users/{userID}/apps", a.userApps)
 		r.With(a.need(store.PermViewUsers)).Get("/roles", a.listRoles)
 		r.With(a.need(store.PermAssign)).Put("/users/{userID}/roles", a.putRoles)
 		r.With(a.need(store.PermLicences)).Put("/users/{userID}/licences", a.putLicences)
+		r.With(a.need(store.PermLicences)).Post("/users/bulk/licences", a.bulkLicences)
 		r.With(a.need(store.PermResetPassword)).Post("/users/bulk/reset-password", a.bulkResetPassword)
 		r.With(a.need(store.PermUserStatus)).Post("/users/bulk/disable", a.bulkDisable)
 		r.With(a.need(store.PermUserStatus)).Post("/users/bulk/enable", a.bulkEnable)
@@ -544,6 +548,9 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !a.checkProducts(w, r, body.Licences) || !checkRoles(w, r, body.Roles) {
+		return
+	}
+	if !a.checkSeats(w, r, body.Licences) {
 		return
 	}
 	name := strings.TrimSpace(body.Name)
