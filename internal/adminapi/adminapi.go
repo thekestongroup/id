@@ -150,6 +150,10 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermGroups)).Patch("/groups/{groupID}", a.renameGroup)
 		r.With(a.need(store.PermGroups)).Delete("/groups/{groupID}", a.deleteGroup)
 		r.With(a.need(store.PermAssign)).Put("/groups/{groupID}/permissions", a.putGroupPermissions)
+		// Licences a group gives its members (view with the groups; change
+		// with Assign licences).
+		r.With(a.need(store.PermViewUsers)).Get("/groups/{groupID}/licences", a.getGroupLicences)
+		r.With(a.need(store.PermLicences)).Put("/groups/{groupID}/licences", a.putGroupLicences)
 		// Who's in a group: Manage groups, or Give permissions for a group
 		// that has permissions (checked in the handlers).
 		r.With(a.need(store.PermViewUsers)).Put("/groups/{groupID}/members/{userID}", a.addMember)
@@ -923,7 +927,14 @@ func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	licences, err := a.store.Licences(ctx, u.ID)
+	// licences: assigned to them (what Manage licences edits);
+	// licenceSources: every licence, with where it comes from.
+	licences, err := a.store.DirectLicences(ctx, u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	sources, err := a.store.LicenceSources(ctx, u.ID)
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -940,7 +951,9 @@ func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
 		CanChange   bool          `json:"canChange"`
 		Licences    []string      `json:"licences"`
 		Roles       []string      `json:"roles"`
-	}{a.withPasskeyCount(r, a.userView(u)), groups, perms.List(), canChange && !u.IsSupport(), licences, roles})
+		// Every licence, direct or through groups, and whether it has a seat.
+		LicenceSources []store.LicenceSource `json:"licenceSources"`
+	}{a.withPasskeyCount(r, a.userView(u)), groups, perms.List(), canChange && !u.IsSupport(), licences, roles, sources})
 }
 
 // PATCH …/users/{id} {name?, username?, role?}: admins can always change

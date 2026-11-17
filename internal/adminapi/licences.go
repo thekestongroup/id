@@ -41,7 +41,7 @@ func (a *API) putLicences(w http.ResponseWriter, r *http.Request) {
 	if !a.setLicences(w, r, u, body.Products) {
 		return
 	}
-	list, err := a.store.Licences(r.Context(), u.ID)
+	list, err := a.store.DirectLicences(r.Context(), u.ID)
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -234,7 +234,9 @@ func (a *API) bulkLicences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.runBulk(w, r, body.UserIDs, "licences", false, func(u *store.User, res *bulkResult) (string, error) {
-		have, err := a.store.Licences(r.Context(), u.ID)
+		// Only what's assigned to them: group licences aren't turned into
+		// assigned ones.
+		have, err := a.store.DirectLicences(r.Context(), u.ID)
 		if err != nil {
 			return "", err
 		}
