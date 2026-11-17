@@ -66,9 +66,12 @@ type appJSON struct {
 	KestonWide bool   `json:"kestonWide"`
 	ManagedBy  string `json:"managedBy"`
 	Retired    bool   `json:"retired"`
+	// The caller (a TKG Admin in The Keston Group) can change it in Keston Admin.
+	CanManage bool `json:"canManage"`
 }
 
-func appView(c *store.Client, org *store.Organisation, defaults map[string]string, counts map[string]int) appJSON {
+func (a *API) appView(r *http.Request, c *store.Client, defaults map[string]string, counts map[string]int) appJSON {
+	org := organisation(r)
 	v := appJSON{ID: c.ID, Name: c.Name, Publisher: c.Publisher, Description: c.Description,
 		Verification: c.Verification, Builtin: c.Builtin, Own: c.OrganisationID != nil, Protocol: c.Protocol,
 		LogoURL: c.LogoURL, DefaultMode: defaults[c.ID], RuleCount: counts[c.ID], KestonWide: c.OrganisationID == nil,
@@ -93,6 +96,7 @@ func appView(c *store.Client, org *store.Organisation, defaults map[string]strin
 	if c.Builtin {
 		v.Fallback = store.AppForced
 	}
+	v.CanManage = v.KestonWide && c.ManagedBy == store.ManagedByAdmin && a.canManageKestonApps(r)
 	return v
 }
 
@@ -120,7 +124,7 @@ func (a *API) appViews(r *http.Request) ([]appJSON, error) {
 		if all[i].ID == ClientID { // Keston Admin is for admins, not set per app
 			continue
 		}
-		apps = append(apps, appView(&all[i], org, defaults, counts))
+		apps = append(apps, a.appView(r, &all[i], defaults, counts))
 	}
 	// TKG Admins in The Keston Group also see the Keston-wide apps they've retired.
 	if a.canManageKestonApps(r) {
@@ -130,7 +134,7 @@ func (a *API) appViews(r *http.Request) ([]appJSON, error) {
 		}
 		for i := range list {
 			if list[i].RetiredAt != nil {
-				apps = append(apps, appView(&list[i], org, defaults, counts))
+				apps = append(apps, a.appView(r, &list[i], defaults, counts))
 			}
 		}
 	}
@@ -200,7 +204,7 @@ func (a *API) getApp(w http.ResponseWriter, r *http.Request) {
 	for _, p := range policies {
 		defaults[p.ClientID] = p.Mode
 	}
-	writeJSON(w, http.StatusOK, appView(c, org, defaults, counts))
+	writeJSON(w, http.StatusOK, a.appView(r, c, defaults, counts))
 }
 
 // PUT …/apps/{clientID} {mode}: the organisation's default access to an app.
