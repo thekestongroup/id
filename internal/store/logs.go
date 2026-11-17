@@ -73,6 +73,14 @@ const (
 	ActionDeletionCancelled    = "deletion.cancelled"
 	ActionOrganisationVerified = "organisation.verified"
 	ActionPlatformSettings     = "platform_settings.changed"
+	ActionMessagePosted        = "message.posted"
+	ActionMessageUpdated       = "message.updated"
+	ActionMessageDeleted       = "message.deleted"
+	ActionIncidentOpened       = "incident.opened"
+	ActionIncidentUpdated      = "incident.updated"
+	ActionMaintenanceScheduled = "maintenance.scheduled"
+	ActionMaintenanceUpdated   = "maintenance.updated"
+	ActionMaintenanceCancelled = "maintenance.cancelled"
 	ActionGuestSetting         = "guests.setting_changed"
 	ActionGuestInvited         = "guest.invited"
 	ActionGuestAccepted        = "guest.accepted"
@@ -94,6 +102,9 @@ const (
 	TargetGroup        = "group"
 	TargetApp          = "app"
 	TargetOrganisation = "organisation"
+	TargetMessage      = "message"
+	TargetIncident     = "incident"
+	TargetMaintenance  = "maintenance"
 )
 
 // AuditEntry is one admin action.

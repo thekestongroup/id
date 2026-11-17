@@ -68,6 +68,9 @@ func (a *API) Routes() http.Handler {
 	r.Get("/notifications", a.notifications)
 	r.Post("/notifications/read", a.readNotifications)
 	r.Delete("/notifications", a.clearNotifications)
+	// Service health (health.go) and the message centre (messages.go).
+	a.healthRoutes(r)
+	a.messageRoutes(r)
 
 	// Guests and account moves, for the person themselves (same for Keston
 	// Admin and Keston ID's account pages; see guests.go).
