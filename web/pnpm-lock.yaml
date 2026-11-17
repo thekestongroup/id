@@ -12,11 +12,14 @@ importers:
         specifier: ^1.68.0
         version: 1.72.0(vue@3.5.45(typescript@6.0.3))
       '@thekestongroup/ui':
-        specifier: ^0.5.0
-        version: 0.5.0(@floating-ui/dom@1.8.0)(vue@3.5.45(typescript@6.0.3))
+        specifier: ^0.9.1
+        version: 0.9.1(@floating-ui/dom@1.8.0)(vue-i18n@11.4.20(vue@3.5.45(typescript@6.0.3)))(vue@3.5.45(typescript@6.0.3))
       vue:
         specifier: ^3.5.44
         version: 3.5.45(typescript@6.0.3)
+      vue-i18n:
+        specifier: ^11.4.20
+        version: 11.4.20(vue@3.5.45(typescript@6.0.3))
       vue-router:
         specifier: ^4.5.1
         version: 4.6.4(vue@3.5.45(typescript@6.0.3))
@@ -96,6 +99,22 @@ packages:
 
   '@internationalized/number@3.6.9':
     resolution: {integrity: sha512-GgWy2caO/+hV9sT/oCTWGHvbjmJMPT9kkXzoKRLnkEq7adghhR7UprhvY9sXrKfrp3NcDfhF6QQHXR1KfQbB8g==}
+
+  '@intlify/core-base@11.4.20':
+    resolution: {integrity: sha512-i3/0mXXMAjK8SLX/t1l+sG3SIzghYSM2rLnHfMLHqUlKa/ysuwqSkGLU4UQem+SkeAge+5ol5mCMspKIhWfMrg==}
+    engines: {node: '>= 22'}
+
+  '@intlify/devtools-types@11.4.20':
+    resolution: {integrity: sha512-8U2tY0MaWqI47pzSTUuFCFxIvBa6uWguW++4ftjdE7lWaRIKEhAFRDGKKNd5lw8wurerJ0URuZpxifHCduLQ6A==}
+    engines: {node: '>= 22'}
+
+  '@intlify/message-compiler@11.4.20':
+    resolution: {integrity: sha512-0pwXAYOG+jGkAJ+H/TPsfeqnHiEqYU99fXN5vlSYdknuBPjo8NEqi0L5WFgmqOnwSPtmIOoi84BDYhrligDcoA==}
+    engines: {node: '>= 22'}
+
+  '@intlify/shared@11.4.20':
+    resolution: {integrity: sha512-qg2pOSUU5Xr2fHZCmluah8h/g/4MG5RfzIZBVR8Id0/c2EKsCPtWvamSiVtwc+4VvYnEGQxZast7uQMTb6jP9A==}
+    engines: {node: '>= 22'}
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -336,10 +355,11 @@ packages:
     peerDependencies:
       vue: ^2.7.0 || ^3.0.0
 
-  '@thekestongroup/ui@0.5.0':
-    resolution: {integrity: sha512-V4yk4PQyWUsyN+jPR8LbITJJySqZCPL9BYYMiJmm47GPO2ukI8ykobmSLk7oilu54mJlsX9NI7PiGfa4kEArow==}
+  '@thekestongroup/ui@0.9.1':
+    resolution: {integrity: sha512-7xHNPNxaa06yOa4JHeTtsfBDFFl3ZQhPP96YoT5DVOMnC0HgttewI322AXap1Pqh7691usxQdwc0kYsdqMSETw==}
     peerDependencies:
       vue: ^3.5.0
+      vue-i18n: ^11.0.0
 
   '@tiptap/core@3.33.1':
     resolution: {integrity: sha512-cWSLHe0Bp44SqEsNMpfSpJeeWenG9/g4pAMRjcEpm0IZN9cmY5fq7LEYZCpjBbVqpzjaT1q7HnkvbBOPTdhbrQ==}
@@ -807,6 +827,12 @@ packages:
   vscode-uri@3.2.0:
     resolution: {integrity: sha512-m2gXo3bn0G1kT9InzMf07fTbqMbGtyckj3bH5ktLO+1Ssv+yiATZ4dhwaQv9UZWxJh6E9IFGnQyjgWVDWVBDrg==}
 
+  vue-i18n@11.4.20:
+    resolution: {integrity: sha512-gyUMq9f+5T3ZvmkjWy+0dzKesaTVN95JdRzjJPW0qKrzFKy/NOqA0wMw9MPraMjTAjHmBhhRA4AwQOnoKztPEw==}
+    engines: {node: '>= 22'}
+    peerDependencies:
+      vue: ^3.0.0
+
   vue-router@4.6.4:
     resolution: {integrity: sha512-Hz9q5sa33Yhduglwz6g9skT8OBPii+4bFn88w6J+J4MfEo4KRRpmiNG/hHHkdbRFlLBOqxN8y8gf2Fb0MTUgVg==}
     peerDependencies:
@@ -886,6 +912,24 @@ snapshots:
   '@internationalized/number@3.6.9':
     dependencies:
       '@swc/helpers': 0.5.24
+
+  '@intlify/core-base@11.4.20':
+    dependencies:
+      '@intlify/devtools-types': 11.4.20
+      '@intlify/message-compiler': 11.4.20
+      '@intlify/shared': 11.4.20
+
+  '@intlify/devtools-types@11.4.20':
+    dependencies:
+      '@intlify/core-base': 11.4.20
+      '@intlify/shared': 11.4.20
+
+  '@intlify/message-compiler@11.4.20':
+    dependencies:
+      '@intlify/shared': 11.4.20
+      source-map-js: 1.2.2
+
+  '@intlify/shared@11.4.20': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -1050,7 +1094,7 @@ snapshots:
       '@tanstack/virtual-core': 3.19.11
       vue: 3.5.45(typescript@6.0.3)
 
-  '@thekestongroup/ui@0.5.0(@floating-ui/dom@1.8.0)(vue@3.5.45(typescript@6.0.3))':
+  '@thekestongroup/ui@0.9.1(@floating-ui/dom@1.8.0)(vue-i18n@11.4.20(vue@3.5.45(typescript@6.0.3)))(vue@3.5.45(typescript@6.0.3))':
     dependencies:
       '@fontsource/lato': 5.3.0
       '@internationalized/date': 3.12.4
@@ -1070,6 +1114,7 @@ snapshots:
       reka-ui: 2.11.0(vue@3.5.45(typescript@6.0.3))
       tailwind-merge: 3.7.0
       vue: 3.5.45(typescript@6.0.3)
+      vue-i18n: 11.4.20(vue@3.5.45(typescript@6.0.3))
     transitivePeerDependencies:
       - '@floating-ui/dom'
 
@@ -1540,6 +1585,14 @@ snapshots:
   vscode-languageserver-types@3.18.5: {}
 
   vscode-uri@3.2.0: {}
+
+  vue-i18n@11.4.20(vue@3.5.45(typescript@6.0.3)):
+    dependencies:
+      '@intlify/core-base': 11.4.20
+      '@intlify/devtools-types': 11.4.20
+      '@intlify/shared': 11.4.20
+      '@vue/devtools-api': 6.6.4
+      vue: 3.5.45(typescript@6.0.3)
 
   vue-router@4.6.4(vue@3.5.45(typescript@6.0.3)):
     dependencies:
