@@ -224,6 +224,43 @@ apps (with a server) name an environment variable holding their secret in
 use PKCE. `verification` is `owned` (The Keston Group's own), `verified`
 (a checked partner) or `none` (shows a warning on the consent page).
 
+### Keston-wide apps: file or Keston Admin
+
+Keston-wide apps (every organisation has them) come from one of two places,
+recorded per app in `clients.managed_by`:
+
+- **`deployment`**: registered from `deploy/clients.json` by
+  `keston-id clients sync`, which runs on every deploy and creates or updates
+  them (name, redirect URIs, scopes, secret from `secretEnv`…). Keston Admin
+  shows them as "Managed by deployment", read-only. Keston's own products
+  (Learn, Forms, Work, Keston Admin itself) stay here: they need
+  `verification: owned`, licences and secrets from Key Vault. To remove one,
+  take it out of the file and delete or retire the row by hand.
+- **`admin`**: created in Keston Admin by TKG Admins in The Keston Group
+  (Apps → Add a Keston-wide app). Name, description, type (web with a
+  generated secret, shown once and kept hashed, or single-page/mobile with
+  PKCE), redirect URIs, scopes and links are edited there; a TKG Admin can
+  retire one (it disappears for everyone and can't be signed in to) and bring
+  it back. They never get Keston's own claims or audiences (`verification` is
+  `none`), have no licences and show the consent prompt. Changes are audited.
+
+`clients sync` only creates or updates apps that are new or `deployment`
+managed; if the file names an ID that a TKG Admin owns, it logs a warning and
+skips it, so the two never overwrite each other. Existing apps are all
+`deployment` managed after the migration.
+
+### App access
+
+Per organisation and app: a default (Forced, Enabled, Disabled; Keston's own
+products are Forced unless set) and ordered rules (`app_rules`). Rules match
+users, groups and IP addresses (empty matches anyone); the first turned-on
+match decides, otherwise the default applies. The decision is made in
+`store.EffectiveAppsFrom` and enforced when signing in (`/authorize` and SAML
+single sign-on, including the address the person signs in from), in
+Connected apps and in an admin's view of someone's apps. Licences still
+apply on top. Rules on IP addresses don't match where the address isn't known
+(an admin looking at someone's apps).
+
 ### An organisation's own apps
 
 Organisations add their own SSO apps in Keston Admin (Apps → Add an app),

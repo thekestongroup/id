@@ -48,31 +48,8 @@ func (a *API) saveMFARule(w http.ResponseWriter, r *http.Request) {
 			*list = []string{}
 		}
 	}
-	if len(body.Users) > 0 {
-		users, err := a.store.UsersInOrganisation(ctx, org.ID)
-		if err != nil {
-			serverError(w, r, err)
-			return
-		}
-		for _, id := range body.Users {
-			if !slices.ContainsFunc(users, func(u store.User) bool { return u.ID == id }) {
-				writeFieldError(w, "users", "Choose from your users")
-				return
-			}
-		}
-	}
-	if len(body.Groups) > 0 {
-		groups, err := a.store.Groups(ctx, org.ID)
-		if err != nil {
-			serverError(w, r, err)
-			return
-		}
-		for _, id := range body.Groups {
-			if !slices.ContainsFunc(groups, func(g store.Group) bool { return g.ID == id }) {
-				writeFieldError(w, "groups", "Choose from your groups")
-				return
-			}
-		}
+	if !a.checkRuleConditions(w, r, body.Users, body.Groups, body.IPRanges) {
+		return
 	}
 	if len(body.Apps) > 0 {
 		apps, err := a.store.ClientsFor(ctx, org.ID)
@@ -86,14 +63,6 @@ func (a *API) saveMFARule(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-	}
-	for i, v := range body.IPRanges {
-		p, ok := parseRange(v)
-		if !ok {
-			writeFieldError(w, "ipRanges", "“"+v+"” isn't an IP address or range, like 203.0.113.7 or 10.0.0.0/8")
-			return
-		}
-		body.IPRanges[i] = p.String()
 	}
 	isNew := body.ID == ""
 	saved, err := a.store.SaveMFARule(ctx, org.ID, body)
@@ -226,4 +195,48 @@ func (a *API) mfaRuleOptions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// checkRuleConditions checks what a rule is about (MFA and app rules): users
+// and groups must be the organisation's; IP ranges are addresses (1.2.3.4)
+// or ranges (10.0.0.0/8), v4 or v6, and are written back in their canonical
+// form. It answers the request with the problem, if any.
+func (a *API) checkRuleConditions(w http.ResponseWriter, r *http.Request, users, groups, ipRanges []string) bool {
+	ctx := r.Context()
+	org := organisation(r)
+	if len(users) > 0 {
+		all, err := a.store.UsersInOrganisation(ctx, org.ID)
+		if err != nil {
+			serverError(w, r, err)
+			return false
+		}
+		for _, id := range users {
+			if !slices.ContainsFunc(all, func(u store.User) bool { return u.ID == id }) {
+				writeFieldError(w, "users", "Choose from your users")
+				return false
+			}
+		}
+	}
+	if len(groups) > 0 {
+		all, err := a.store.Groups(ctx, org.ID)
+		if err != nil {
+			serverError(w, r, err)
+			return false
+		}
+		for _, id := range groups {
+			if !slices.ContainsFunc(all, func(g store.Group) bool { return g.ID == id }) {
+				writeFieldError(w, "groups", "Choose from your groups")
+				return false
+			}
+		}
+	}
+	for i, v := range ipRanges {
+		p, ok := parseRange(v)
+		if !ok {
+			writeFieldError(w, "ipRanges", "“"+v+"” isn't an IP address or range, like 203.0.113.7 or 10.0.0.0/8")
+			return false
+		}
+		ipRanges[i] = p.String()
+	}
+	return true
 }

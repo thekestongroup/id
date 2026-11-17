@@ -705,7 +705,10 @@ func TestSAMLApps(t *testing.T) {
 	}
 
 	// Disabled for a group: the flow stops before any response.
-	api.call("PUT", "/apps/"+app.App.ID, map[string]any{"groupId": g.ID, "mode": "disabled"}, nil)
+	if s := api.call("POST", "/apps/"+app.App.ID+"/rules", map[string]any{"name": "Group", "groups": []string{g.ID},
+		"mode": "disabled"}, nil); s != http.StatusCreated {
+		t.Fatalf("rule: %d", s)
+	}
 	resp, _ = b.do("GET", app.App.SAML.IdP.StartURL, nil, nil)
 	resp, _ = b.do("GET", "/api/flow?authRequestID="+mustQuery(resp.Header.Get("Location"), "authRequestID"), nil, nil)
 	if resp.StatusCode != http.StatusForbidden {

@@ -129,9 +129,27 @@ func (s *Store) RenameGroup(ctx context.Context, orgID, groupID, name string) er
 	return err
 }
 
+// DeleteGroup deletes a group. App rules about it lose it; a rule that was
+// only about this group goes too (with no conditions it would apply to
+// everyone).
 func (s *Store) DeleteGroup(ctx context.Context, orgID, groupID string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM groups WHERE organisation_id = $1 AND id = $2`, orgID, groupID)
-	return err
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM app_rules WHERE organisation_id = $1 AND group_ids = ARRAY[$2::uuid]
+		AND cardinality(user_ids) = 0 AND cardinality(ip_ranges) = 0`, orgID, groupID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE app_rules SET group_ids = array_remove(group_ids, $2::uuid)
+		WHERE organisation_id = $1 AND $2::uuid = ANY(group_ids)`, orgID, groupID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM groups WHERE organisation_id = $1 AND id = $2`, orgID, groupID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) GroupMembers(ctx context.Context, groupID string) ([]User, error) {
@@ -194,47 +212,48 @@ const (
 	AppDisabled = "disabled" // off, and people can't use it
 )
 
-// AppPolicy is one setting: the organisation's default (GroupID nil) or a
-// group's.
+// AppPolicy is the organisation's default for an app. (Per-group settings
+// are rules now: app_rules.go.)
 type AppPolicy struct {
-	GroupID  *string `json:"groupId"`
-	ClientID string  `json:"clientId"`
-	Mode     string  `json:"mode"`
+	ClientID string `json:"clientId"`
+	Mode     string `json:"mode"`
 }
 
 func (s *Store) AppPolicies(ctx context.Context, orgID string) ([]AppPolicy, error) {
-	rows, err := s.DB.Query(ctx, `SELECT group_id::text, client_id, mode FROM app_policies WHERE organisation_id = $1`,
-		orgID)
+	rows, err := s.DB.Query(ctx, `SELECT client_id, mode FROM app_policies
+		WHERE organisation_id = $1 AND group_id IS NULL`, orgID)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[AppPolicy])
 }
 
-// SetAppPolicy sets the default (groupID nil) or a group's mode for an app;
-// mode "" removes the setting (back to the default, or Keston's own).
-func (s *Store) SetAppPolicy(ctx context.Context, orgID string, groupID *string, clientID, mode string) error {
+// SetAppPolicy sets the organisation's default for an app; mode "" removes it
+// (back to Keston's own: forced for Keston's apps, otherwise up to each
+// person).
+func (s *Store) SetAppPolicy(ctx context.Context, orgID, clientID, mode string) error {
 	if mode == "" {
 		_, err := s.DB.Exec(ctx, `DELETE FROM app_policies WHERE organisation_id = $1
-			AND group_id IS NOT DISTINCT FROM $2::uuid AND client_id = $3`, orgID, groupID, clientID)
+			AND group_id IS NULL AND client_id = $2`, orgID, clientID)
 		return err
 	}
 	_, err := s.DB.Exec(ctx, `INSERT INTO app_policies (organisation_id, group_id, client_id, mode)
-		VALUES ($1, $2, $3, $4)
+		VALUES ($1, NULL, $2, $3)
 		ON CONFLICT (organisation_id, coalesce(group_id, '00000000-0000-0000-0000-000000000000'), client_id)
-		DO UPDATE SET mode = $4, updated_at = now()`, orgID, groupID, clientID, mode)
+		DO UPDATE SET mode = $3, updated_at = now()`, orgID, clientID, mode)
 	return err
 }
 
-// rank: when someone's groups disagree, Disabled wins, then Forced, then
-// Enabled (blocking an app is the safe way round).
-var rank = map[string]int{AppDisabled: 3, AppForced: 2, AppEnabled: 1}
-
 // EffectiveApps is someone's access to each app that has a setting (or is
-// one of Keston's own): their groups' settings where any apply, otherwise
-// the organisation's default, otherwise forced for Keston's own apps. Apps
-// not in the map are up to them.
+// one of Keston's own): the first of the app's rules that matches them, else
+// the organisation's default, else forced for Keston's own apps. Apps not in
+// the map are up to them. The address is the one they're signing in from, for
+// rules on IP addresses ("" when not known: those rules don't match).
 func (s *Store) EffectiveApps(ctx context.Context, u *User) (map[string]string, error) {
+	return s.EffectiveAppsFrom(ctx, u, "")
+}
+
+func (s *Store) EffectiveAppsFrom(ctx context.Context, u *User, ip string) (map[string]string, error) {
 	out := map[string]string{}
 	builtin, err := s.BuiltinClients(ctx)
 	if err != nil {
@@ -247,25 +266,23 @@ func (s *Store) EffectiveApps(ctx context.Context, u *User) (map[string]string, 
 	if err != nil {
 		return nil, err
 	}
-	groups, err := s.GroupIDsForUser(ctx, u.ID)
+	for _, p := range policies {
+		out[p.ClientID] = p.Mode
+	}
+	rules, err := s.AppRulesByApp(ctx, u.OrganisationID)
 	if err != nil {
 		return nil, err
 	}
-	in := map[string]bool{}
-	for _, g := range groups {
-		in[g] = true
-	}
-	fromGroups := map[string]string{}
-	for _, p := range policies {
-		switch {
-		case p.GroupID == nil:
-			out[p.ClientID] = p.Mode
-		case in[*p.GroupID] && rank[p.Mode] > rank[fromGroups[p.ClientID]]:
-			fromGroups[p.ClientID] = p.Mode
+	if len(rules) > 0 {
+		groups, err := s.GroupIDsForUser(ctx, u.ID)
+		if err != nil {
+			return nil, err
 		}
-	}
-	for id, mode := range fromGroups {
-		out[id] = mode
+		for id, list := range rules {
+			if mode := ResolveAppMode("", list, u.ID, groups, ip); mode != "" {
+				out[id] = mode
+			}
+		}
 	}
 	// No licence, no access to a Keston product (support accounts aside).
 	if !u.IsSupport() {

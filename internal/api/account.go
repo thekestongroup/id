@@ -75,7 +75,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 func (a *API) apps(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	ctx := r.Context()
-	eff, err := a.store.EffectiveApps(ctx, cur.user)
+	eff, err := a.store.EffectiveAppsFrom(ctx, cur.user, clientIP(r))
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -150,7 +150,7 @@ func (a *API) revokeApp(w http.ResponseWriter, r *http.Request) {
 	cur := from(r)
 	ctx := r.Context()
 	id := chi.URLParam(r, "clientID")
-	eff, err := a.store.EffectiveApps(ctx, cur.user)
+	eff, err := a.store.EffectiveAppsFrom(ctx, cur.user, clientIP(r))
 	if err != nil {
 		serverError(w, r, err)
 		return

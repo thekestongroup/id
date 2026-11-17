@@ -35,14 +35,14 @@ func (s *Store) SaveOrganisationClient(ctx context.Context, q Querier, orgID str
 	var id string
 	return q.QueryRow(ctx, `INSERT INTO clients (id, name, publisher, verification, redirect_uris,
 			post_logout_redirect_uris, required_scopes, optional_scopes, privacy_url, terms_url, organisation_id,
-			protocol, logo_url, native)
-		VALUES ($1, $2, $3, 'none', $4, $5, $6, '{}', $7, $8, $9, $10, $11, $12)
+			protocol, logo_url, native, description)
+		VALUES ($1, $2, $3, 'none', $4, $5, $6, '{}', $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (id) DO UPDATE SET name = $2, publisher = $3, redirect_uris = $4,
-			post_logout_redirect_uris = $5, required_scopes = $6, privacy_url = $7, terms_url = $8, logo_url = $11
+			post_logout_redirect_uris = $5, required_scopes = $6, privacy_url = $7, terms_url = $8, logo_url = $11, description = $13
 		WHERE clients.organisation_id = $9
 		RETURNING id`,
 		c.ID, c.Name, c.Publisher, c.RedirectURIs, c.PostLogoutRedirectURIs, c.RequiredScopes, c.PrivacyURL,
-		c.TermsURL, orgID, c.Protocol, c.LogoURL, c.Native).Scan(&id)
+		c.TermsURL, orgID, c.Protocol, c.LogoURL, c.Native, c.Description).Scan(&id)
 }
 
 // SetClientSecret replaces an app's secret with a new one, returned once;

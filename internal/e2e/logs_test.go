@@ -272,7 +272,7 @@ func TestLogs(t *testing.T) {
 		store.ActionUserPasswordReset: "",
 		store.ActionGroupRenamed:      "Name: Office → Office staff",
 		store.ActionGroupPermissions:  "Permissions: none → See logs",
-		store.ActionAppAccess:         "Everyone: Default → Disabled",
+		store.ActionAppAccess:         "Default state: Default → Disabled",
 		store.ActionSettings:          "Change their name: Off → On",
 		store.ActionPasswordPolicy:    "Minimum length: 8 → 14",
 		store.ActionGroupMemberAdded:  "Group: Office staff",

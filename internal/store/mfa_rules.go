@@ -103,22 +103,29 @@ func (s *Store) OrderMFARules(ctx context.Context, orgID string, ids []string) e
 
 // Matches: whether a rule applies to this user (in these groups), here.
 func (r MFARule) Matches(userID string, groups []string, sc SignInContext) bool {
-	if len(r.Users) > 0 && !slices.Contains(r.Users, userID) {
-		return false
-	}
-	if len(r.Groups) > 0 && !slices.ContainsFunc(r.Groups, func(g string) bool { return slices.Contains(groups, g) }) {
-		return false
-	}
 	if len(r.Apps) > 0 && (sc.ClientID == "" || !slices.Contains(r.Apps, sc.ClientID)) {
 		return false
 	}
-	if len(r.IPRanges) > 0 {
-		ip, err := netip.ParseAddr(sc.IP)
+	return matchesPeople(r.Users, r.Groups, r.IPRanges, userID, groups, sc.IP)
+}
+
+// matchesPeople: the conditions MFA rules and app rules share. Each set
+// condition must match (any one of its values); an empty one matches anyone.
+// An address condition only matches a known address.
+func matchesPeople(users, groups, ipRanges []string, userID string, userGroups []string, ipAddr string) bool {
+	if len(users) > 0 && !slices.Contains(users, userID) {
+		return false
+	}
+	if len(groups) > 0 && !slices.ContainsFunc(groups, func(g string) bool { return slices.Contains(userGroups, g) }) {
+		return false
+	}
+	if len(ipRanges) > 0 {
+		ip, err := netip.ParseAddr(ipAddr)
 		if err != nil {
 			return false
 		}
 		ip = ip.Unmap()
-		if !slices.ContainsFunc(r.IPRanges, func(c string) bool {
+		if !slices.ContainsFunc(ipRanges, func(c string) bool {
 			p, err := netip.ParsePrefix(c)
 			return err == nil && p.Contains(ip)
 		}) {

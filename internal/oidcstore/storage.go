@@ -241,12 +241,15 @@ func (s *Storage) GetClientByClientID(ctx context.Context, id string) (op.Client
 	if c.Protocol != "oidc" { // SAML apps sign in through /saml (internal/samlidp)
 		return nil, fmt.Errorf("client %q: not an OpenID Connect app", id)
 	}
+	if c.RetiredAt != nil { // a Keston-wide app a TKG Admin retired
+		return nil, fmt.Errorf("client %q: retired", id)
+	}
 	return client{Client: c, idTokenTTL: s.cfg.IDTokenTTL}, nil
 }
 
 func (s *Storage) AuthorizeClientIDSecret(ctx context.Context, id, clientSecret string) error {
 	c, err := s.store.ClientByID(ctx, id)
-	if err != nil || c.SecretHash == nil || c.Protocol != "oidc" {
+	if err != nil || c.SecretHash == nil || c.Protocol != "oidc" || c.RetiredAt != nil {
 		return errors.New("invalid client")
 	}
 	ok, err := secret.CheckPassword(*c.SecretHash, clientSecret)
