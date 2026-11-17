@@ -52,6 +52,7 @@ export const router = createRouter({
         { path: '', component: () => import('./pages/account/Overview.vue'), meta: { title: 'Your account' } },
         { path: 'security', component: () => import('./pages/account/Security.vue'), meta: { title: 'Security' } },
         { path: 'apps', component: () => import('./pages/account/ConnectedApps.vue'), meta: { title: 'Connected apps' } },
+        { path: 'requests', component: () => import('./pages/account/Requests.vue'), meta: { title: 'Request an app' } },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/account' },

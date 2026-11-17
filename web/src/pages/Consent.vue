@@ -17,7 +17,7 @@ import { useFlow } from '../lib/useFlow'
  * with a code; Cancel with error=access_denied. From the OAuthConsent story
  * in Keston UI's "Examples/Keston ID".
  */
-const { authRequestID, flow, client, error: flowError, loading } = useFlow('consent')
+const { authRequestID, flow, client, error: flowError, refused, loading } = useFlow('consent')
 const router = useRouter()
 
 const user = computed(() => flow.value?.user)
@@ -54,7 +54,7 @@ function switchAccount() {
 
 <template>
   <KestonIdPage brand="tkg">
-    <FlowState :loading="loading" :error="flowError">
+    <FlowState :loading="loading" :error="flowError" :refused="refused">
       <Card v-if="client && user" padding="md">
         <div class="flex flex-col gap-6">
           <div class="flex items-center justify-center gap-3" aria-hidden="true">

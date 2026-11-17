@@ -16,7 +16,7 @@ import { useFlow } from '../lib/useFlow'
  * story in Keston UI's "Examples/Keston ID". Without an app (signing in to
  * Keston ID itself) it says so instead.
  */
-const { authRequestID, client, error: flowError, loading, next } = useFlow('sign-in')
+const { authRequestID, client, error: flowError, refused, loading, next } = useFlow('sign-in')
 
 const form = reactive({ email: '', password: '' })
 const errors = reactive<{ email?: string; password?: string; form?: string }>({})
@@ -34,6 +34,8 @@ async function signIn() {
     await next(flow)
   } catch (e) {
     status.value = 'idle'
+    // Signed in, but the app is off for them: the page offers "Request access".
+    if (e instanceof ApiError && e.code === 'app_refused') return window.location.reload()
     if (e instanceof ApiError && (e.field === 'email' || e.field === 'password')) errors[e.field] = e.message
     else errors.form = e instanceof Error ? e.message : String(e)
   }
@@ -79,7 +81,7 @@ onBeforeUnmount(() => autofill?.abort())
 
 <template>
   <KestonIdPage :brand="client ? 'tkg' : 'kestonId'">
-    <FlowState :loading="loading" :error="flowError">
+    <FlowState :loading="loading" :error="flowError" :refused="refused">
       <Card padding="md" :ui="{ footer: 'justify-center' }">
         <div class="flex flex-col gap-6">
           <div v-if="client" class="flex justify-center" aria-hidden="true">

@@ -72,6 +72,7 @@ func (a *API) MeRoutes() http.Handler {
 	r.Patch("/", a.updateProfile)
 	r.Get("/apps", a.apps)
 	r.Delete("/apps/{clientID}", a.revokeApp)
+	a.appRequestRoutes(r)
 	r.Get("/sessions", a.sessions)
 	r.Delete("/sessions/{sessionID}", a.signOutDevice)
 	r.Put("/picture", a.setPicture)
