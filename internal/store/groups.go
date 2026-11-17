@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -26,6 +28,73 @@ const groupColumns = `g.id, g.name, (SELECT count(*) FROM group_members m JOIN u
 func (s *Store) Groups(ctx context.Context, orgID string) ([]Group, error) {
 	rows, err := s.DB.Query(ctx, `SELECT `+groupColumns+` FROM groups g WHERE g.organisation_id = $1
 		ORDER BY lower(g.name)`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[Group])
+}
+
+// GroupFilter narrows and orders the groups list. Zero values: no filter,
+// by name.
+type GroupFilter struct {
+	// Part of the name.
+	Q string
+	// Members compares the member count (Op: gt, gte, lt, lte or eq) with N.
+	Members *MemberCount
+	// Gives permissions in Keston Admin (true) or none (false).
+	Permissions *bool
+	// Sort is name, members, permissions (how many) or created.
+	Sort string
+	Desc bool
+}
+
+type MemberCount struct {
+	Op string
+	N  int
+}
+
+var memberOps = map[string]string{"gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "eq": "="}
+
+// IsMemberOp: op is one MemberCount understands.
+func IsMemberOp(op string) bool { _, ok := memberOps[op]; return ok }
+
+// GroupSorts are what GroupFilter.Sort can be.
+var GroupSorts = []string{"name", "members", "permissions", "created"}
+
+// GroupsFiltered lists an organisation's groups, filtered and sorted in SQL.
+func (s *Store) GroupsFiltered(ctx context.Context, orgID string, f GroupFilter) ([]Group, error) {
+	w := &where{}
+	w.add("g.organisation_id = ?", orgID)
+	if f.Q != "" {
+		w.add(`strpos(lower(g.name), lower(?)) > 0`, f.Q)
+	}
+	members := `(SELECT count(*) FROM group_members m JOIN users u ON u.id = m.user_id
+		WHERE m.group_id = g.id AND u.status <> 'deleted')`
+	perms := `(SELECT count(*) FROM group_permissions p WHERE p.group_id = g.id)`
+	if f.Members != nil {
+		op, ok := memberOps[f.Members.Op]
+		if !ok {
+			return nil, fmt.Errorf("member count: unknown comparison %q", f.Members.Op)
+		}
+		w.add(members+" "+op+" ?", f.Members.N)
+	}
+	if f.Permissions != nil {
+		if *f.Permissions {
+			w.add(perms + " > 0")
+		} else {
+			w.add(perms + " = 0")
+		}
+	}
+	order := map[string]string{"members": members, "permissions": perms, "created": "g.created_at"}[f.Sort]
+	if order == "" {
+		order = "lower(g.name)"
+	}
+	dir := "ASC"
+	if f.Desc {
+		dir = "DESC"
+	}
+	rows, err := s.DB.Query(ctx, `SELECT `+groupColumns+` FROM groups g WHERE `+strings.Join(w.sql, " AND ")+
+		` ORDER BY `+order+` `+dir+`, lower(g.name), g.id`, w.args...)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +167,22 @@ func (s *Store) GroupIDsForUser(ctx context.Context, userID string) ([]string, e
 		return nil, err
 	}
 	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+// GroupIDsInOrganisation: the groups everyone is in, by user ID.
+func (s *Store) GroupIDsInOrganisation(ctx context.Context, orgID string) (map[string][]string, error) {
+	rows, err := s.DB.Query(ctx, `SELECT m.user_id::text, m.group_id::text FROM group_members m
+		JOIN groups g ON g.id = m.group_id WHERE g.organisation_id = $1`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	var user, group string
+	_, err = pgx.ForEachRow(rows, []any{&user, &group}, func() error {
+		out[user] = append(out[user], group)
+		return nil
+	})
+	return out, err
 }
 
 // ── App access ───────────────────────────────────────────────────────────

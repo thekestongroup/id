@@ -200,12 +200,14 @@ func (s *Store) DeleteOldLogs(ctx context.Context) error {
 type LogFilter struct {
 	OrganisationID string
 	// Audit log: by them, to them, or through their support account. Sign-ins: theirs.
-	UserID string
+	// Any of these users (empty: everyone).
+	UserIDs []string
 	// Audit log: these actions.
 	Actions []string
 	// Sign-ins: successful (true) or failed (false), and why.
 	Success *bool
-	Reason  string
+	// Any of these reasons (empty: any).
+	Reasons []string
 	// From is inclusive, To exclusive.
 	From, To *time.Time
 	// Paging: entries older than this ID (the previous page's Next).
@@ -285,9 +287,9 @@ func (f LogFilter) limit() int {
 // Before for the next page (0: no more).
 func (s *Store) AuditLog(ctx context.Context, f LogFilter) (out []AuditRecord, next int64, err error) {
 	w := f.where("")
-	if f.UserID != "" {
-		w.add("(actor_id = ? OR support_staff_id = ? OR (target_type = 'user' AND target_id = ?))",
-			f.UserID, f.UserID, f.UserID)
+	if len(f.UserIDs) > 0 {
+		w.add("(actor_id = ANY(?::uuid[]) OR support_staff_id = ANY(?::uuid[]) OR (target_type = 'user' AND target_id = ANY(?::text[])))",
+			f.UserIDs, f.UserIDs, f.UserIDs)
 	}
 	if len(f.Actions) > 0 {
 		w.add("action = ANY(?)", f.Actions)
@@ -313,14 +315,14 @@ func (s *Store) AuditLog(ctx context.Context, f LogFilter) (out []AuditRecord, n
 // SignIns lists an organisation's sign-in attempts, newest first.
 func (s *Store) SignIns(ctx context.Context, f LogFilter) (out []SignInRecord, next int64, err error) {
 	w := f.where("l.")
-	if f.UserID != "" {
-		w.add("l.user_id = ?", f.UserID)
+	if len(f.UserIDs) > 0 {
+		w.add("l.user_id = ANY(?::uuid[])", f.UserIDs)
 	}
 	if f.Success != nil {
 		w.add("l.success = ?", *f.Success)
 	}
-	if f.Reason != "" {
-		w.add("l.reason = ?", f.Reason)
+	if len(f.Reasons) > 0 {
+		w.add("l.reason = ANY(?)", f.Reasons)
 	}
 	rows, err := s.DB.Query(ctx, `SELECT l.id, l.user_id::text, l.user_name, l.email, l.method, l.client_id, c.name,
 			l.success, l.reason, l.support_staff_name, l.ip, l.user_agent, l.created_at

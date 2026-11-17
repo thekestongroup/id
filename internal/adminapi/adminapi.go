@@ -119,6 +119,7 @@ func (a *API) Routes() http.Handler {
 		r.With(a.need(store.PermApps)).Put("/apps/{clientID}", a.putAppPolicy)
 		r.With(a.need(store.PermApps)).Route("/own-apps", a.ownAppRoutes)
 		r.With(a.need(store.PermGroups)).Post("/groups", a.createGroup)
+		r.With(a.need(store.PermViewUsers)).Post("/groups/bulk/members", a.bulkGroupMembers)
 		r.With(a.need(store.PermViewUsers)).Get("/groups/{groupID}", a.getGroup)
 		r.With(a.need(store.PermGroups)).Patch("/groups/{groupID}", a.renameGroup)
 		r.With(a.need(store.PermGroups)).Delete("/groups/{groupID}", a.deleteGroup)
@@ -461,6 +462,8 @@ func (a *API) userView(u *store.User) userJSON {
 		CreatedAt: u.CreatedAt.Format(timeFormat), PasswordSetAt: u.PasswordChangedAt.Format(timeFormat)}
 }
 
+// GET …/users?q=&role=&status=&licence=&group=&mfa=&sort=&dir=: the
+// organisation's users, filtered and sorted (see userFilter).
 func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := a.store.UsersInOrganisation(r.Context(), organisation(r).ID)
 	if err != nil {
@@ -487,17 +490,19 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	type row struct {
-		userJSON
-		// The caller can change them (see canChange).
-		CanChange bool `json:"canChange"`
-		// The products they have a licence for.
-		Licences []string `json:"licences"`
-		// Their admin roles (besides global admin).
-		Roles []string `json:"roles"`
+	f, ok := userFilterFrom(w, r)
+	if !ok {
+		return
+	}
+	var groups map[string][]string
+	if len(f.groups) > 0 {
+		if groups, err = a.store.GroupIDsInOrganisation(r.Context(), organisation(r).ID); err != nil {
+			serverError(w, r, err)
+			return
+		}
 	}
 	mine, admin := callerPerms(r), caller(r).Role == "global_admin"
-	out := make([]row, len(users))
+	out := make([]userRow, len(users))
 	for i := range users {
 		u := &users[i]
 		can := !u.IsSupport() && (admin || (u.Role != "global_admin" && mine.Covers(perms[u.ID].List())))
@@ -509,8 +514,9 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 		if rs == nil {
 			rs = []string{}
 		}
-		out[i] = row{withPasskeys(a.userView(u), passkeys[u.ID]), can, l, rs}
+		out[i] = userRow{withPasskeys(a.userView(u), passkeys[u.ID]), can, l, rs, groups[u.ID], u.CreatedAt}
 	}
+	out = f.apply(out)
 	writeJSON(w, http.StatusOK, out)
 }
 
