@@ -151,3 +151,20 @@ func inCloudflare(a netip.Addr) bool {
 	}
 	return false
 }
+
+// Country is the visitor's country code (Cloudflare's CF-IPCountry header),
+// or "" when we aren't behind Cloudflare, the header is missing, or it says
+// the country is unknown. Only trusted when the connection came from our own
+// infrastructure or Cloudflare, like the address in From.
+func Country(r *http.Request) string {
+	m, _ := mode.Load().(Mode)
+	peer, ok := peerAddr(r.RemoteAddr)
+	if m != Cloudflare || !ok || !trustedPeer(peer) {
+		return ""
+	}
+	v := strings.ToUpper(strings.TrimSpace(r.Header.Get("CF-IPCountry")))
+	if len(v) != 2 || v == "XX" || v == "T1" || v[0] < 'A' || v[0] > 'Z' || v[1] < 'A' || v[1] > 'Z' {
+		return ""
+	}
+	return v
+}

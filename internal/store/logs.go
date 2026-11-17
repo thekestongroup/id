@@ -178,6 +178,8 @@ type SignIn struct {
 	// A support sign-in: the Keston staff member.
 	Staff         *User
 	IP, UserAgent string
+	// Where from (a country code, if known): to spot an admin signing in from somewhere new.
+	Country string
 }
 
 var uuidRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -208,7 +210,9 @@ func (s *Store) LogSignIn(ctx context.Context, e SignIn) {
 		clip(e.IP, 64), clip(e.UserAgent, 500))
 	if err != nil {
 		slog.Warn("sign-in log", "method", e.Method, "error", err)
+		return
 	}
+	s.signInAlerts(context.WithoutCancel(ctx), e)
 }
 
 // DeleteOldLogs deletes log entries older than LogRetention.
