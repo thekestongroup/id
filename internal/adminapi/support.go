@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/thekestongroup/id/internal/clientip"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -416,7 +417,7 @@ func (a *API) deleteNow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "Only The Keston Group can delete an organisation immediately.")
 		return
 	}
-	deleted, err := a.store.DeleteOrganisationNow(r.Context(), org.ID, u, clientIP(r))
+	deleted, err := a.store.DeleteOrganisationNow(r.Context(), org.ID, u, clientip.From(r))
 	switch {
 	case errors.Is(err, store.ErrIsPlatform):
 		writeError(w, http.StatusConflict, "platform", "The Keston Group's organisation can't be deleted.")

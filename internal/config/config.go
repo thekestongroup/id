@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/thekestongroup/id/internal/clientip"
 	"os"
 	"strings"
 	"time"
@@ -41,6 +42,9 @@ type Config struct {
 	// at start if it isn't there: its global admins are Keston staff.
 	PlatformName   string
 	PlatformDomain string
+	// KESTON_ID_TRUSTED_PROXY: "none" (default; the client address is the
+	// TCP peer) or "cloudflare" (trust CF-Connecting-IP behind the ingress).
+	TrustedProxy clientip.Mode
 }
 
 func Load() (*Config, error) {
@@ -57,6 +61,11 @@ func Load() (*Config, error) {
 		SessionTTL:      14 * 24 * time.Hour,
 		AuthRequestTTL:  30 * time.Minute,
 	}
+	tp, ok := clientip.Parse(os.Getenv("KESTON_ID_TRUSTED_PROXY"))
+	if !ok {
+		return nil, errors.New(`KESTON_ID_TRUSTED_PROXY must be "none" or "cloudflare"`)
+	}
+	c.TrustedProxy = tp
 	c.Insecure = strings.HasPrefix(c.Issuer, "http://")
 	for _, o := range strings.Split(os.Getenv("KESTON_ID_API_ORIGINS"), ",") {
 		if o = strings.TrimRight(strings.TrimSpace(o), "/"); o != "" {

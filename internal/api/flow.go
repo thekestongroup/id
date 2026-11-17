@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"github.com/thekestongroup/id/internal/clientip"
 	"net/http"
 	"net/url"
 	"slices"
@@ -46,7 +47,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 		res.User = &u
 		// Required actions (required.go): up to date before anything else.
 		// Where they're signing in from and to, for MFA rules.
-		sc := store.SignInContext{IP: clientIP(r)}
+		sc := store.SignInContext{IP: clientip.From(r)}
 		if authRequestID != "" {
 			if ar, err := a.store.AuthRequestByID(ctx, authRequestID); err == nil {
 				sc.ClientID = ar.ClientID
@@ -141,7 +142,7 @@ func (a *API) next(r *http.Request, cur *current, authRequestID string) (*flowRe
 			". Ask one of " + cur.user.Organisation + "'s admins if you need it."
 	}
 	// Turned off for them by their organisation (Keston Admin → Apps).
-	if eff, err := a.store.EffectiveAppsFrom(ctx, cur.user, clientIP(r)); err == nil && eff[client.ID] == store.AppDisabled {
+	if eff, err := a.store.EffectiveAppsFrom(ctx, cur.user, clientip.From(r)); err == nil && eff[client.ID] == store.AppDisabled {
 		a.logSignIn(r, store.SignIn{User: cur.user, Method: store.SignInApp, ClientID: client.ID,
 			Reason: store.ReasonAppDisabled})
 		return nil, http.StatusForbidden, cur.user.Organisation + " has turned off " + client.Name +
@@ -313,7 +314,7 @@ func (a *API) signIn(w http.ResponseWriter, r *http.Request) {
 	if hasMFA {
 		stage = store.StagePassword
 	}
-	token, sess, err := a.store.CreateSession(ctx, user.ID, stage, []string{"pwd"}, r.UserAgent(), clientIP(r),
+	token, sess, err := a.store.CreateSession(ctx, user.ID, stage, []string{"pwd"}, r.UserAgent(), clientip.From(r),
 		a.cfg.SessionTTL)
 	if err != nil {
 		serverError(w, r, err)

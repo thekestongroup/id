@@ -7,12 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/thekestongroup/id/internal/clientip"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -94,7 +93,7 @@ func (a *API) CookieSession(r *http.Request) (*store.Session, *store.User, strin
 	}
 	// An admin may have required something since (required.go): then it's
 	// not fully signed in any more.
-	if _, err := a.settle(r.Context(), cur, store.SignInContext{IP: clientIP(r)}); err != nil || cur.session.Stage != store.StageVerified {
+	if _, err := a.settle(r.Context(), cur, store.SignInContext{IP: clientip.From(r)}); err != nil || cur.session.Stage != store.StageVerified {
 		return nil, nil, ""
 	}
 	return cur.session, cur.user, cur.token
@@ -177,14 +176,6 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
-}
-
-func clientIP(r *http.Request) string {
-	if f := r.Header.Get("X-Forwarded-For"); f != "" {
-		return strings.TrimSpace(strings.Split(f, ",")[0])
-	}
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
-	return host
 }
 
 func isNotFound(err error) bool { return errors.Is(err, store.ErrNotFound) }

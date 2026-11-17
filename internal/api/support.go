@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/thekestongroup/id/internal/clientip"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -87,7 +88,7 @@ func (a *API) SupportSignIn(w http.ResponseWriter, r *http.Request) {
 		fail("Support access has ended.")
 		return
 	}
-	token, _, err := a.store.CreateSession(ctx, sa.ID, "verified", []string{"support"}, r.UserAgent(), clientIP(r),
+	token, _, err := a.store.CreateSession(ctx, sa.ID, "verified", []string{"support"}, r.UserAgent(), clientip.From(r),
 		time.Until(*sa.ExpiresAt))
 	if err != nil {
 		slog.Error("support sign-in", "error", err)

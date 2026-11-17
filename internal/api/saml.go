@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/thekestongroup/id/internal/clientip"
 	"net/http"
 
 	"github.com/thekestongroup/id/internal/store"
@@ -15,7 +16,7 @@ func (a *API) ActiveSessionID(r *http.Request) string {
 	if cur == nil {
 		return ""
 	}
-	if _, err := a.settle(r.Context(), cur, store.SignInContext{IP: clientIP(r)}); err != nil || cur.session.Stage != store.StageVerified {
+	if _, err := a.settle(r.Context(), cur, store.SignInContext{IP: clientip.From(r)}); err != nil || cur.session.Stage != store.StageVerified {
 		return ""
 	}
 	return cur.session.ID

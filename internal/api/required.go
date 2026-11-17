@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"github.com/thekestongroup/id/internal/clientip"
 	"net/http"
 	"slices"
 	"strings"
@@ -162,7 +163,7 @@ func (a *API) inActions(w http.ResponseWriter, r *http.Request, action string) *
 		writeError(w, http.StatusUnauthorized, "signed_out", "Sign in again to continue.")
 		return nil
 	}
-	actions, err := a.settle(r.Context(), cur, store.SignInContext{IP: clientIP(r)})
+	actions, err := a.settle(r.Context(), cur, store.SignInContext{IP: clientip.From(r)})
 	if err != nil {
 		serverError(w, r, err)
 		return nil
@@ -375,7 +376,7 @@ func (a *API) signInWithPass(w http.ResponseWriter, r *http.Request) {
 	_ = a.store.RecordLogin(ctx, user.ID, true)
 	log(true, "")
 	token, sess, err := a.store.CreateSession(ctx, user.ID, store.StageActions, []string{amrAccessPass}, r.UserAgent(),
-		clientIP(r), a.cfg.SessionTTL)
+		clientip.From(r), a.cfg.SessionTTL)
 	if err != nil {
 		serverError(w, r, err)
 		return

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/thekestongroup/id/internal/clientip"
 	"net/http"
 
 	"github.com/thekestongroup/id/internal/store"
@@ -9,7 +10,7 @@ import (
 // logSignIn records a sign-in attempt (Keston Admin → Logs → Sign-ins),
 // with where it came from.
 func (a *API) logSignIn(r *http.Request, e store.SignIn) {
-	e.IP, e.UserAgent = clientIP(r), r.UserAgent()
+	e.IP, e.UserAgent = clientip.From(r), r.UserAgent()
 	a.store.LogSignIn(r.Context(), e)
 }
 
