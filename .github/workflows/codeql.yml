@@ -50,7 +50,7 @@ jobs:
           build-mode: ${{ matrix.build-mode }}
 
       # The Go packages embed web/dist, so the web app is built before Go is.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: matrix.language == 'go'
         with:
           node-version: 24
