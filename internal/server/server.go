@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -79,6 +80,7 @@ func New(cfg *config.Config, st *store.Store, storage *oidcstore.Storage, webFS 
 		return nil, err
 	}
 	r.Mount("/saml", saml.Routes())
+	r.Post("/csp-report", cspReport)
 	// Opening a Keston support account, from Keston Admin.
 	r.Get("/support-sign-in", a.SupportSignIn)
 
@@ -216,9 +218,31 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		// The sign-in pages must never be framed (clickjacking).
 		h.Set("X-Frame-Options", "DENY")
+		// Enforced: never framed. The wider policy below is only reported for
+		// now (see csp), so nothing can break while we learn what it flags.
 		h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+		// SAML sign-in answers with a page that posts to the app and submits
+		// itself with an inline script, so it cannot meet a strict policy.
+		if !strings.HasPrefix(r.URL.Path, "/saml/") {
+			h.Set("Content-Security-Policy-Report-Only", csp)
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// csp is the policy for Keston ID's own pages: scripts, styles, images and
+// requests only from this origin, no plugins, no inline script. Violations are
+// POSTed to /csp-report and logged. Once they stop, send this as the enforced
+// Content-Security-Policy instead (keeping frame-ancestors).
+const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; " +
+	"font-src 'self'; connect-src 'self'; manifest-src 'self'; form-action 'self'; " +
+	"base-uri 'none'; object-src 'none'; frame-ancestors 'none'; report-uri /csp-report"
+
+// cspReport logs a browser's report of something the policy blocked.
+func cspReport(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<10))
+	slog.Warn("csp violation", "report", string(body), "request_id", middleware.GetReqID(r.Context()))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func requestLog(next http.Handler) http.Handler {
