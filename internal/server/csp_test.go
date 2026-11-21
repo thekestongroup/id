@@ -15,23 +15,20 @@ func TestSecurityHeadersCSP(t *testing.T) {
 		return rec.Header()
 	}
 
-	for _, path := range []string{"/", "/saml/sso", "/v1/me"} {
-		if got := get(path).Get("Content-Security-Policy"); got != "frame-ancestors 'none'" {
-			t.Errorf("%s: enforced CSP = %q, want frame-ancestors only", path, got)
+	for _, path := range []string{"/", "/v1/me"} {
+		got := get(path).Get("Content-Security-Policy")
+		for _, want := range []string{"script-src 'self'", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "report-uri /csp-report"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: CSP %q is missing %q", path, got, want)
+			}
+		}
+		if strings.Contains(got, "unsafe-inline") || strings.Contains(got, "unsafe-eval") {
+			t.Errorf("%s: CSP must not allow inline or eval: %q", path, got)
 		}
 	}
-
-	ro := get("/").Get("Content-Security-Policy-Report-Only")
-	for _, want := range []string{"script-src 'self'", "object-src 'none'", "base-uri 'none'", "report-uri /csp-report"} {
-		if !strings.Contains(ro, want) {
-			t.Errorf("report-only CSP %q is missing %q", ro, want)
-		}
-	}
-	if strings.Contains(ro, "unsafe-inline") || strings.Contains(ro, "unsafe-eval") {
-		t.Errorf("report-only CSP must not allow inline or eval: %q", ro)
-	}
-	if got := get("/saml/sso").Get("Content-Security-Policy-Report-Only"); got != "" {
-		t.Errorf("SAML pages submit inline and must not get the strict policy, got %q", got)
+	// SAML pages submit inline: they only get the framing rule.
+	if got := get("/saml/sso").Get("Content-Security-Policy"); got != "frame-ancestors 'none'" {
+		t.Errorf("SAML CSP = %q, want frame-ancestors only", got)
 	}
 }
 
