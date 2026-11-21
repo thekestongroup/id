@@ -8,6 +8,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Also once a week, so a vulnerability disclosed after the last change still
+  # shows up even when nobody has pushed anything.
+  schedule:
+    - cron: "23 5 * * 1"
 
 permissions:
   contents: read
@@ -42,6 +46,11 @@ jobs:
         working-directory: web
         run: pnpm build
 
+      # Known-vulnerable production dependencies. Fails on high or critical.
+      - name: Audit web dependencies
+        working-directory: web
+        run: pnpm audit --prod --audit-level=high
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -56,6 +65,13 @@ jobs:
         working-directory: .
         run: go test ./...
 
+      # Known vulnerabilities in the Go standard library and our modules, only
+      # those our code can actually reach. Fixing one usually means raising the
+      # `go` line in go.mod to the latest patch release.
+      - name: Go vulnerability check
+        working-directory: .
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+
   image:
     name: Image builds
     runs-on: ubuntu-latest
@@ -66,3 +82,13 @@ jobs:
       # default (last) stage is the production one.
       - name: Build (no push)
         run: docker build --tag "$IMAGE:pr" .
+
+      # Scans the built image's operating system packages and binaries. Only
+      # fails on high or critical findings that have a fix available.
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:pr
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
