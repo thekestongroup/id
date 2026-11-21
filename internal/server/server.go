@@ -218,13 +218,13 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		// The sign-in pages must never be framed (clickjacking).
 		h.Set("X-Frame-Options", "DENY")
-		// Enforced: never framed. The wider policy below is only reported for
-		// now (see csp), so nothing can break while we learn what it flags.
-		h.Set("Content-Security-Policy", "frame-ancestors 'none'")
 		// SAML sign-in answers with a page that posts to the app and submits
-		// itself with an inline script, so it cannot meet a strict policy.
-		if !strings.HasPrefix(r.URL.Path, "/saml/") {
-			h.Set("Content-Security-Policy-Report-Only", csp)
+		// itself with an inline script, so it cannot meet the strict policy; it
+		// is only kept from being framed.
+		if strings.HasPrefix(r.URL.Path, "/saml/") {
+			h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+		} else {
+			h.Set("Content-Security-Policy", csp)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -232,8 +232,7 @@ func securityHeaders(next http.Handler) http.Handler {
 
 // csp is the policy for Keston ID's own pages: scripts, styles, images and
 // requests only from this origin, no plugins, no inline script. Violations are
-// POSTed to /csp-report and logged. Once they stop, send this as the enforced
-// Content-Security-Policy instead (keeping frame-ancestors).
+// POSTed to /csp-report and logged.
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; " +
 	"font-src 'self'; connect-src 'self'; manifest-src 'self'; form-action 'self'; " +
 	"base-uri 'none'; object-src 'none'; frame-ancestors 'none'; report-uri /csp-report"
