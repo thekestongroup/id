@@ -1,0 +1,72 @@
+name: CodeQL
+
+# GitHub's code scanner. It looks for security bugs in our own code (injection,
+# unsafe redirects, weak crypto and so on) rather than in dependencies, which
+# CI's audit and vulnerability checks cover. Results appear under the
+# repository's Security tab.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "41 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: go
+            build-mode: manual
+    steps:
+      - uses: actions/checkout@v4
+
+      # Go goes in before init so CodeQL can trace the build.
+      - uses: actions/setup-go@v5
+        if: matrix.language == 'go'
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # The Go packages embed web/dist, so the web app is built before Go is.
+      - uses: actions/setup-node@v4
+        if: matrix.language == 'go'
+        with:
+          node-version: 24
+
+      - name: Build web
+        if: matrix.language == 'go'
+        working-directory: web
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Build Go
+        if: matrix.language == 'go'
+        run: go build ./...
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
