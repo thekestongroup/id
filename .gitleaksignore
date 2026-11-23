@@ -1,0 +1,17 @@
+# Findings from the first full-history scan, checked by hand. Each line is a
+# gitleaks fingerprint (commit:file:rule:line). Add new ones only after
+# checking, with a comment saying why it is safe.
+
+# A test password written into an end-to-end test.
+13038bda30afd4c5e189be26274d82b5596dbd43:internal/adminapi/create_user_e2e_test.go:generic-api-key:53
+
+# The characters access passes are made from. Not a secret.
+14de53b759f13e7d96cce8145d7280cc2b0dbf2e:internal/secret/accesspass.go:generic-api-key:12
+
+# Example client credentials in an early README ("curl -u ..."), long since removed.
+8afe327a00e2f6fb7fdcdfa3ae686c4bc93f3509:README.md:curl-auth-user:58
+
+# A local-development default for KESTON_ID_SECRET in the first version of the
+# config, long since removed. Today KESTON_ID_SECRET_KEY must be set, and there
+# is no default.
+33e9af280aa41f9cb5039f4ee4fd9c4f23bafcd6:config.go:generic-api-key:19
