@@ -61,9 +61,16 @@ jobs:
         working-directory: .
         run: go vet ./...
 
+      # -race finds data races the plain run can miss.
       - name: Go test
         working-directory: .
-        run: go test ./...
+        run: go test -race ./...
+
+      # Bug patterns and misuse that go vet doesn't cover. The version is
+      # pinned; raise it when raising the Go version. Settings: staticcheck.conf.
+      - name: Staticcheck
+        working-directory: .
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
 
       # Known vulnerabilities in the Go standard library and our modules, only
       # those our code can actually reach. Fixing one usually means raising the
