@@ -3,7 +3,7 @@
 # checking, with a comment saying why it is safe.
 
 # A test password written into an end-to-end test.
-13038bda30afd4c5e189be26274d82b5596dbd43:internal/adminapi/create_user_e2e_test.go:generic-api-key
+13038bda30afd4c5e189be26274d82b5596dbd43:internal/adminapi/create_user_e2e_test.go:generic-api-key:53
 
 # The characters access passes are made from. Not a secret.
 14de53b759f13e7d96cce8145d7280cc2b0dbf2e:internal/secret/accesspass.go:generic-api-key:12
