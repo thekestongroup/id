@@ -110,7 +110,7 @@ jobs:
         run: |
           az acr login --name "$ACR"
           REF="$ACR.azurecr.io/$IMAGE"
-          docker build --tag "$REF:${{ github.sha }}" --tag "$REF:latest" .
+          docker build --build-arg APP_BUILD="${{ github.sha }}" --tag "$REF:${{ github.sha }}" --tag "$REF:latest" .
           docker push --all-tags "$REF"
 
   deploy:
