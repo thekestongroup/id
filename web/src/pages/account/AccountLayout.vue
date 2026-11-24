@@ -99,6 +99,7 @@ const nav = computed<SidebarSection[]>(() => [
     :user="me.user"
     :link-component="RouterLink"
     :footer="footer"
+    :launcher="{ current: 'id' }"
     @account-settings="router.push('/account')"
     @switch-account="router.push('/choose-account')"
     @log-out="signOut(router)"
