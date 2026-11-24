@@ -2,7 +2,7 @@
 # the classic docker build.
 
 # ── 1. Web UI (Vue + Keston UI) ─────────────────────────────────────────────
-FROM node:24-alpine AS web
+FROM node:26-alpine AS web
 WORKDIR /web
 RUN corepack enable
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
