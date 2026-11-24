@@ -12,6 +12,7 @@ import { useI18n } from 'vue-i18n'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import GuestInvitationPopup from '../../components/GuestInvitationPopup.vue'
 import { api, type Notification } from '../../lib/api'
+import { footer } from '../../lib/footer'
 import { invitations, loadInvitations } from '../../lib/guests'
 import { me, signOut } from '../../lib/session'
 
@@ -97,6 +98,7 @@ const nav = computed<SidebarSection[]>(() => [
     :sections="nav"
     :user="me.user"
     :link-component="RouterLink"
+    :footer="footer"
     @account-settings="router.push('/account')"
     @switch-account="router.push('/choose-account')"
     @log-out="signOut(router)"

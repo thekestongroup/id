@@ -8,6 +8,9 @@ RUN corepack enable
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
+# The footer shows the build: pass the commit with --build-arg APP_BUILD=<sha>.
+ARG APP_BUILD=""
+ENV APP_BUILD=$APP_BUILD
 RUN pnpm build
 
 # ── 2. Go binary, with the web UI embedded ──────────────────────────────────
