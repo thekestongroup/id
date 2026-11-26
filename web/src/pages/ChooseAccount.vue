@@ -66,7 +66,7 @@ function useAnother() {
           <li v-for="account in accounts" :key="account.id">
             <button
               type="button"
-              class="flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left outline-2 -outline-offset-2 outline-transparent transition-colors hover:bg-surface-elevated focus-visible:outline-focus disabled:cursor-wait"
+              class="flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left outline-2 -outline-offset-2 outline-transparent transition-colors hover:bg-hover focus-visible:outline-focus disabled:cursor-wait"
               :disabled="!!choosing"
               @click="choose(account)"
             >
