@@ -129,7 +129,7 @@ async function finished() {
             </p>
             <div v-else class="flex flex-col gap-1">
               <p>In your app, choose to enter a setup key, and type:</p>
-              <p class="rounded bg-surface px-3 py-2 text-center font-mono font-bold tracking-wide break-all select-all">
+              <p class="rounded bg-surface-muted px-3 py-2 text-center font-mono font-bold tracking-wide break-all select-all">
                 {{ keyGroups }}
               </p>
             </div>
@@ -156,7 +156,7 @@ async function finished() {
           If you lose your phone, each of these codes signs you in once. Save them somewhere safe, like a password
           manager. You won't see them again.
         </p>
-        <ul class="grid grid-cols-2 gap-2 rounded bg-surface p-4 text-center font-mono text-sm select-all">
+        <ul class="grid grid-cols-2 gap-2 rounded bg-surface-muted p-4 text-center font-mono text-sm select-all">
           <li v-for="c in backupCodes" :key="c">{{ c }}</li>
         </ul>
       </div>
