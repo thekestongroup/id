@@ -46,7 +46,7 @@ require (
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/pquerna/otp v1.5.0
 	github.com/thekestongroup/id/kit v0.0.0
-	github.com/zitadel/oidc/v3 v3.52.0
+	github.com/zitadel/oidc/v3 v3.53.0
 	golang.org/x/crypto v0.59.0
 	golang.org/x/text v0.44.0
 	rsc.io/qr v0.2.0
